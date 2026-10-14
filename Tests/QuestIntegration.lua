@@ -45,7 +45,7 @@ local panelNames = {
 
 local function Harness(deferred, realTTS)
     local h = { created = {}, speech = {}, heads = {}, flow = {}, diagnostics = {}, exists = true, sex = 2, modelID = 100,
-        nativeCalls = {}, stops = 0, timers = {}, playerExists = true, playerSex = 2, questID = 1,
+        nativeCalls = {}, progress = {}, stops = 0, timers = {}, playerExists = true, playerSex = 2, questID = 1,
         texts = { detail = "Offer text.\n Objectives elsewhere.",
             progress = "Progress text!", reward = "Reward text?" }, resolveCalls = 0 }
     local environment = setmetatable({}, { __index = _G })
@@ -144,6 +144,9 @@ local function Harness(deferred, realTTS)
             h.flow[#h.flow + 1] = "hide"
         end,
         FinishTextPlayback = function(_, reason) h.endReason = reason end,
+        OnTextProgress = function(_, text, chunk, offset)
+            h.progress[#h.progress + 1] = { text = text, chunk = chunk, offset = offset }
+        end,
     }
     local speak
     if realTTS then
@@ -199,6 +202,25 @@ local function Harness(deferred, realTTS)
         environment[name]:Show()
     end
     function h:Click() self.integration.Button:Fire("OnClick") end
+    function h:CreateQuestLogNarrator()
+        Load("UI/QuestLogIntegration.lua")
+        local questLog = addon.UI.QuestLogIntegration
+        for _, field in ipairs({ "Frame", "DetailsFrame", "TextScrollFrame", "BackButton" }) do
+            questLog[field] = Frame()
+            questLog[field].shown = true
+            questLog[field].IsVisible = questLog[field].IsShown
+        end
+        questLog.DetailsFrame.questID = h.questID
+        environment.C_QuestLog = {
+            GetSelectedQuest = function() return h.questID end,
+            GetLogIndexForQuestID = function() return 1 end,
+        }
+        environment.GetQuestLogQuestText = function(index)
+            Equal(index, 1)
+            return h.texts.detail, "Objectives must not be narrated."
+        end
+        return questLog
+    end
     if not deferred then h:CreateQuestUI() end
     h.integration:Initialize()
     return h
@@ -423,7 +445,8 @@ Test("Real TTS dispatcher honors reading modes and owns replacement", function()
     h:Click()
     Equal(#h.speech, 1, "Quest integration enters through Speak")
     Equal(tts.CurrentSession.mode, "full", "Existing full-text default")
-    Equal(h.nativeCalls[1].text, h.texts.detail, "Whole-text submission unchanged")
+    Equal(h.nativeCalls[1].text, "Offer text. Objectives elsewhere.", "Whole speech whitespace is normalized")
+    Equal(h.heads[1].text, h.texts.detail, "Full mode display keeps original whitespace")
     Equal(h.stops, 0, "First narration needs no cancellation")
     h.addon.Database:SetReadingMode("split")
     h:Click()
@@ -446,6 +469,78 @@ Test("Real TTS dispatcher honors reading modes and owns replacement", function()
     local count = #h.nativeCalls
     timer:Fire()
     Equal(#h.nativeCalls, count, "Replaced automatic request cannot interrupt another caller")
+end)
+
+Test("QuestFrame and Quest Log sanitize speech while keeping original Talking Head text", function()
+    for _, source in ipairs({ "QuestFrame", "QuestLog" }) do
+        for _, mode in ipairs({ "full", "split" }) do
+            local h = Harness(false, true)
+            local original = "  Go to Andorhal / Chillwind Camp.\n Café_雪\\now|please~again!  "
+            h.texts.detail = original
+            h.addon.Database:SetReadingMode(mode)
+            local narrator
+            if source == "QuestFrame" then
+                h.environment.QuestFrame:Show()
+                h:Panel("QuestFrameDetailPanel")
+                narrator = h.integration
+            else
+                narrator = h:CreateQuestLogNarrator()
+            end
+            Equal(narrator:SpeakCurrentText(), true)
+            Equal(h.speech[1].text, original, "Source passes original text to the shared dispatcher")
+            Equal(h.heads[1].text, original, "Talking Head receives unchanged original text")
+            Equal(#h.nativeCalls, 1, "Both modes start with one request")
+            local tts = h.addon.TTS
+            local mark = "OUTLOUD:SPEECH:" .. tts.CurrentSession.id .. ":"
+            local token = mode == "full" and "WHOLE" or "1"
+            Equal(h.nativeCalls[1].text, mode == "full"
+                and "Go to Andorhal Chillwind Camp. Café 雪 now please again!"
+                or "Go to Andorhal Chillwind Camp.")
+            tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 101, mark .. token)
+            Equal(h.addon.UI.TalkingHead.loading, false, "Owned playback clears loading")
+            Equal(h.progress[1].text, mode == "full" and original or "Go to Andorhal / Chillwind Camp.")
+            Equal(h.progress[1].chunk, mode == "full" and 0 or 1)
+            tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_FINISHED", 101)
+            if mode == "split" then
+                Equal(#h.nativeCalls, 2, "Prefetch only the next sentence")
+                Equal(h.nativeCalls[2].text, "Café 雪 now please again!")
+                tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 102, mark .. "2")
+                Equal(h.progress[2].text, "Café_雪\\now|please~again!", "Display keeps sentence separators")
+                Equal(h.progress[2].chunk, 2)
+                tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_FINISHED", 102)
+            else
+                Equal(#h.nativeCalls, 1, "Full mode remains one request")
+            end
+            Equal(tts.CurrentSession, nil)
+            Equal(h.addon.UI.TalkingHead.shown, false, "Completion cleans up presentation")
+        end
+    end
+end)
+
+Test("Empty sanitized quest narration clears Talking Head and loading in both sources and modes", function()
+    for _, source in ipairs({ "QuestFrame", "QuestLog" }) do
+        for _, mode in ipairs({ "full", "split" }) do
+            local h = Harness(false, true)
+            h.texts.detail = " / \\ | _ ~ \t\n"
+            h.addon.Database:SetReadingMode(mode)
+            local narrator
+            if source == "QuestFrame" then
+                h.environment.QuestFrame:Show()
+                h:Panel("QuestFrameDetailPanel")
+                narrator = h.integration
+            else
+                narrator = h:CreateQuestLogNarrator()
+            end
+            local ok, reason = narrator:SpeakCurrentText()
+            Equal(ok, false)
+            Equal(reason, "invalid-text")
+            Equal(#h.nativeCalls, 0, "Empty speech never reaches the native engine")
+            Equal(h.addon.TTS.CurrentSession, nil)
+            Equal(h.addon.Narration.Narration, nil, "Release presentation ownership")
+            Equal(h.addon.UI.TalkingHead.shown, false)
+            Equal(h.addon.UI.TalkingHead.loading, false)
+        end
+    end
 end)
 
 Test("Talking Head closes on owned completion in both reading modes", function()

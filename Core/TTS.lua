@@ -88,6 +88,16 @@ function TTS:SplitSentences(text)
     return sentences
 end
 
+function TTS:SanitizeSpeechText(text)
+    return (text:gsub("[/\\|_~]", " "):gsub("%s+", " ")
+        :gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function EscapeSpeechText(text)
+    -- Escape only speech, before adding trusted ownership markup.
+    return (text:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
+end
+
 function TTS:Initialize()
     if self.Initialized then
         return
@@ -152,13 +162,17 @@ function TTS:StartSession(mode, voiceID, onSessionEnded, onPlaybackStarted, onTe
 end
 
 function TTS:SubmitText(session, text, chunk)
+    if text == "" then
+        return false, "invalid-text"
+    end
+
     local token = chunk or "WHOLE"
     local mark = "OUTLOUD:SPEECH:" .. session.id .. ":" .. token
     OutLoud:Debug("TTS SpeakText call: session:", session.id, "chunk:", token, "bytes:", #text)
     local ok, message = pcall(
         C_VoiceChat.SpeakText,
         session.voiceID,
-        '<bookmark mark="' .. mark .. '"/>' .. text,
+        '<bookmark mark="' .. mark .. '"/>' .. EscapeSpeechText(text),
         0,
         100,
         false
@@ -181,11 +195,20 @@ function TTS:SubmitText(session, text, chunk)
 end
 
 function TTS:SubmitChunk(session, chunk)
-    if self.CurrentSession ~= session or session.queued[chunk] then
+    if self.CurrentSession ~= session then
         return false
     end
 
-    local sentence = session.sentences[chunk]
+    -- Empty speech has no playback bookmark; advance without renumbering display text.
+    while session.speechSentences[chunk] == "" do
+        chunk = chunk + 1
+    end
+
+    if session.queued[chunk] then
+        return false
+    end
+
+    local sentence = session.speechSentences[chunk]
 
     if not sentence then
         return false
@@ -209,8 +232,22 @@ function TTS:SpeakStreaming(text, voiceID, onSessionEnded, onPlaybackStarted, on
         return false, "no-sentences"
     end
 
+    local speechSentences = {}
+    local lastChunk
+    for chunk, sentence in ipairs(sentences) do
+        speechSentences[chunk] = self:SanitizeSpeechText(sentence)
+        if speechSentences[chunk] ~= "" then
+            lastChunk = chunk
+        end
+    end
+    if not lastChunk then
+        return false, "invalid-text"
+    end
+
     local session = self:StartSession(self.ReadingModes.SPLIT, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
     session.sentences = sentences
+    session.speechSentences = speechSentences
+    session.lastChunk = lastChunk
     session.queued = {}
 
     return self:SubmitChunk(session, 1)
@@ -223,9 +260,14 @@ function TTS:SpeakWholeText(text, voiceID, onSessionEnded, onPlaybackStarted, on
         return false, reason
     end
 
+    local speechText = self:SanitizeSpeechText(text)
+    if speechText == "" then
+        return false, "invalid-text"
+    end
+
     local session = self:StartSession(self.ReadingModes.FULL, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
     session.text = text
-    return self:SubmitText(session, text)
+    return self:SubmitText(session, speechText)
 end
 
 function TTS:Speak(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
@@ -336,7 +378,7 @@ function TTS:OnEvent(event, utteranceID, bookmark)
         OutLoud:Debug("TTS playback finished: session:", session.id, "chunk:", token, "utterance:", utteranceID)
         session.utterances[utteranceID] = nil
 
-        if token == "WHOLE" or token == #session.sentences then
+        if token == "WHOLE" or token == session.lastChunk then
             session.finished = true
             self.CurrentSession = nil
             OutLoud:Debug("TTS session completed:", session.id)

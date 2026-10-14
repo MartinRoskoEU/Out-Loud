@@ -52,13 +52,30 @@ Callers supply text and an already-resolved voice ID to the `OutLoud.TTS` single
   `.`, `!`, `?` sentence splitter. The first sentence is submitted immediately;
   each valid sentence ownership bookmark submits only the next sentence. Duplicate bookmarks
   cannot queue a sentence twice. No timers or artificial delays are used.
-- `SpeakWholeText(text, voiceID)` submits the complete text unchanged in one
+- `SpeakWholeText(text, voiceID)` submits the sanitized complete text in one
   request, preceded by one ownership bookmark. It never splits or prefetches.
 - `Speak(text, voiceID)` reads the existing saved `readingMode` through the
   database: `"split"` selects streaming and `"full"` selects whole text. The
   default is `"full"`.
 - `Stop()` cancels active Out Loud speech. Calling it while idle leaves other
   TTS alone.
+
+`TTS:SanitizeSpeechText(text)` replaces `/`, `\`, `|`, `_`, and `~` with spaces,
+collapses whitespace, and trims it. Punctuation and Unicode text are preserved.
+Both reading modes use this helper before payload construction. Speech is then
+escaped for XML text (`&`, `<`, `>`) before the unchanged ownership bookmark is
+prepended, so user text and pre-encoded entities cannot introduce markup.
+The controller previously appended raw text; it had no escaping helper.
+
+Full mode retains the exact original text for display callbacks. Split mode keeps
+the existing splitter's original normalized sentences and indexes alongside
+sanitized speech sentences. Empty speech sentences are skipped without queuing a
+request or accepting a bookmark for that index. Completion follows the last
+nonempty speech sentence, including when a trailing separator-only sentence was
+skipped. Entirely empty sanitized input returns `false, "invalid-text"` before
+starting a session, preserving the existing invalid-input cancellation policy.
+The shared narration coordinator already hides Talking Head and clears loading
+when submission is rejected. No synthetic bookmarks or timers are added.
 
 The controller's existing event frame also handles `PLAYER_LOGOUT`, including
 UI teardown for `/reload`, by calling `Stop()` before the Lua state is discarded.
@@ -131,6 +148,13 @@ saved settings, and addon load order. Speech tests mock the native
 engine and playback events to check streaming, mode dispatch, cancellation,
 stale/duplicate bookmarks, completion, failures, and input validation. Model
 loading, rendering, and actual audio still require in-game checks.
+Sanitization checks cover separator replacement, punctuation and Unicode,
+literal XML/entity escaping, original display callbacks, single-request full
+mode, split indexes/prefetch, and empty speech cleanup. Quest checks exercise
+both QuestFrame and Quest Log speech paths with the real TTS dispatcher and a
+mock Talking Head. These are standalone/mock checks; actual speech, XML/entity
+handling by Forever's native TTS, bookmark timing, and sentence display/animation
+still require manual in-game verification.
 The Settings mocks model the modern checkbox, slider/stepper callbacks, and
 scrollbar percentages. The TOC is loaded in order, but Talking Head initialization
 is stubbed because standalone Lua cannot instantiate its XML template. XML paths

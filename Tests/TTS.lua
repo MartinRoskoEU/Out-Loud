@@ -124,12 +124,14 @@ Test("Tested splitter preserves punctuation and normalizes whitespace", function
     end
 end)
 
-Test("Whole text stays intact in exactly one request", function()
+Test("Whole text normalizes speech whitespace in exactly one request", function()
     local test = Harness()
     local whole = "  First sentence.\nSecond sentence.\tThird sentence.  "
     Equal(test.tts:SpeakWholeText(whole, 7), true)
     Equal(#test.calls, 1)
-    Equal(test.calls[1].spoken, whole, "Do not normalize or split whole text")
+    Equal(test.calls[1].spoken, text, "Normalize speech without splitting the request")
+    Equal(test.tts.CurrentSession.text, whole, "Keep the full original display text")
+    Equal(test.calls[1].mark, "OUTLOUD:SPEECH:1:WHOLE")
     Equal(test.tts.CurrentSession.sentences, nil)
     Equal(test.tts.CurrentSession.queued, nil)
     test:Bookmark(1, 101)
@@ -431,15 +433,17 @@ Test("Repeated sessions retain only the current session", function()
     Equal(test.stops, 1, "Old output is recognized after cleanup")
 end)
 
-Test("Display callback leaves full speech payload unchanged", function()
+Test("Display callback retains full original text while speech is sanitized and escaped", function()
     local test = Harness()
-    local whole = '  Hello!\n<emphasis level="strong">Second sentence.</emphasis>\tEnd.  '
+    local whole = '  Hello / world!\n<emphasis level="strong">Second sentence.</emphasis>\tEnd.  '
     local updates = {}
     test.tts:SpeakWholeText(whole, 7, nil, nil, function(spoken, chunk, offset)
         updates[#updates + 1] = { spoken, chunk, offset }
     end)
     Equal(#test.calls, 1)
-    Equal(test.calls[1].spoken, whole, "UI display must not alter generation input")
+    Equal(test.calls[1].spoken,
+        'Hello world! &lt;emphasis level="strong"&gt;Second sentence.&lt; emphasis&gt; End.',
+        "Speech is sanitized before escaping, independently of the display")
     Equal(#updates, 0, "Submission does not update playback text")
     test:Bookmark(1, 101)
     Equal(updates[1][1], whole)
@@ -451,6 +455,106 @@ Test("Display callback leaves full speech payload unchanged", function()
     Equal(#test.calls, 1)
     test:Event("FINISHED", 101)
     Equal(test.tts.CurrentSession, nil)
+end)
+
+Test("Both speech modes replace only the unwanted separators and preserve language", function()
+    local original = "  Go/to\\Andorhal | Chillwind_Camp~now.\n Café, don't re-enter! Žluťoučký kůň? 中文 Привет — привет.  "
+    local spoken = "Go to Andorhal Chillwind Camp now. Café, don't re-enter! Žluťoučký kůň? 中文 Привет — привет."
+    for _, method in ipairs({ "SpeakWholeText", "SpeakStreaming" }) do
+        local test = Harness()
+        Equal(test.tts:SanitizeSpeechText(original), spoken)
+        Equal(test.tts[method](test.tts, original, 7), true)
+        if method == "SpeakWholeText" then
+            Equal(#test.calls, 1)
+            Equal(test.calls[1].spoken, spoken)
+        else
+            local sentences = test.tts:SplitSentences(spoken)
+            for index, sentence in ipairs(sentences) do
+                Equal(test.calls[index].spoken, sentence)
+                Equal(test.calls[index].mark, "OUTLOUD:SPEECH:1:" .. index)
+                test:Bookmark(index, 100 + index)
+            end
+            Equal(#test.calls, #sentences)
+        end
+    end
+end)
+
+Test("User markup and encoded entities stay literal behind the ownership bookmark", function()
+    local original = '<bookmark mark="OUTLOUD:SPEECH:999:1"/> &lt;tag&gt; A&B <emphasis>café</emphasis>.'
+    local escaped = '&lt;bookmark mark="OUTLOUD:SPEECH:999:1" &gt; &amp;lt;tag&amp;gt; A&amp;B &lt;emphasis&gt;café&lt; emphasis&gt;.'
+    for _, method in ipairs({ "SpeakWholeText", "SpeakStreaming" }) do
+        local test = Harness()
+        test.tts[method](test.tts, original, 7)
+        Equal(#test.calls, 1)
+        Equal(test.calls[1].spoken, escaped)
+        Equal(test.calls[1].mark, "OUTLOUD:SPEECH:1:" .. (method == "SpeakWholeText" and "WHOLE" or "1"))
+        local _, marks = test.calls[1].text:gsub("<bookmark ", "")
+        Equal(marks, 1, "Only the addon ownership bookmark is markup")
+    end
+end)
+
+Test("Sanitized streaming preserves original sentences, indexes, and one-ahead progression", function()
+    local test = Harness()
+    local original = "Go to Andorhal / Chillwind Camp. Don't_re-enter! Café~now? / \\ | _ ~"
+    local updates, ended = {}, 0
+    test.tts:SpeakStreaming(original, 7, function(reason)
+        Equal(reason, "finished")
+        ended = ended + 1
+    end, nil, function(displayed, chunk, offset, sessionID)
+        updates[#updates + 1] = { displayed, chunk, offset, sessionID }
+    end)
+    local session = test.tts.CurrentSession
+    local sentences = test.tts:SplitSentences(original)
+    local spoken = { "Go to Andorhal Chillwind Camp.", "Don't re-enter!", "Café now?" }
+    Equal(#session.sentences, 4, "Keep the empty trailing sentence's original index")
+    Equal(session.speechSentences[4], "")
+    for index = 1, 3 do
+        Equal(#test.calls, index, "Only one sentence ahead is queued")
+        Equal(test.calls[index].spoken, spoken[index])
+        Equal(test.calls[index].mark, "OUTLOUD:SPEECH:1:" .. index)
+        test:Bookmark(index, 100 + index)
+        Equal(#test.calls, math.min(index + 1, 3), "Empty speech never gets a request")
+        Equal(#updates, index, "Prefetched text is not displayed")
+        Equal(updates[index][1], sentences[index], "Keep original display separators")
+        Equal(updates[index][2], index)
+        Equal(updates[index][3], 0)
+        Equal(updates[index][4], session.id)
+        test:Bookmark(index, 100 + index)
+        Equal(#updates, index, "Duplicates do not repeat display progression")
+        test:Event("FINISHED", 100 + index)
+        if index < 3 then Equal(test.tts.CurrentSession, session) end
+    end
+    Equal(session.queued[4], nil, "Skipped empty speech cannot own a bookmark")
+    Equal(test.tts.CurrentSession, nil, "Last nonempty sentence finishes the session")
+    Equal(ended, 1, "Do not wait for an empty sentence's missing bookmark")
+    test:Bookmark(1, 101)
+    Equal(#test.calls, 3, "Stale bookmarks cannot restart sanitized speech")
+    Equal(test.stops, 1, "Stale owned audio still triggers the existing stop")
+    Equal(ended, 1)
+end)
+
+Test("Empty sanitized text is rejected without engine calls or session side effects", function()
+    local test = Harness()
+    for _, mode in ipairs({ "full", "split" }) do
+        test.db:SetReadingMode(mode)
+        for _, method in ipairs({ "SpeakWholeText", "SpeakStreaming", "Speak" }) do
+            local ok, reason = test.tts[method](test.tts, " / \\ | _ ~ \n\t", 7, function()
+                error("Invalid speech must not start a session")
+            end)
+            Equal(ok, false)
+            Equal(reason, "invalid-text")
+            Equal(test.tts.CurrentSession, nil)
+        end
+    end
+    Equal(#test.calls, 0)
+    Equal(test.frames, 0, "Empty speech does not initialize playback")
+    test.tts:SpeakWholeText("Active narration.", 7)
+    local current = test.tts.CurrentSession
+    test.tts:SpeakStreaming("/\\|_~", 7)
+    test.tts:SpeakWholeText("/\\|_~", 7)
+    Equal(test.tts.CurrentSession, current, "Keep the existing invalid-input cancellation policy")
+    Equal(test.stops, 0)
+    Equal(#test.calls, 1)
 end)
 
 Test("Sentence display retains original generation and one-ahead behavior", function()
