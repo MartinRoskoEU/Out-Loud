@@ -37,6 +37,36 @@ local function GetGender(sex)
     end
 end
 
+function VoiceSelection:Initialize()
+    if self.Frame then return end
+    local frame = CreateFrame("Frame")
+    frame:RegisterEvent("VOICE_CHAT_TTS_VOICES_UPDATE")
+    frame:SetScript("OnEvent", function()
+        self:RefreshVoices()
+    end)
+    self.Frame = frame
+end
+
+function VoiceSelection:RefreshVoices()
+    local voices = OutLoud.TTS:RefreshVoices()
+    local page = OutLoud.UI.SettingsPage
+    if page and page.VoiceOptions then
+        page:RefreshVoiceOptions()
+        page:RefreshVoiceAssignment()
+    end
+    return voices
+end
+
+function VoiceSelection:IsVoiceAvailable(voiceID)
+    if type(voiceID) ~= "number" or voiceID < 0 or voiceID % 1 ~= 0 then
+        return false
+    end
+    for _, voice in ipairs(OutLoud.TTS:GetVoices()) do
+        if voice.voiceID == voiceID then return true end
+    end
+    return false
+end
+
 local function ResolveConfiguredVoice(info)
     if not info.gender then
         info.reason = "unknown-sex"
@@ -46,6 +76,9 @@ local function ResolveConfiguredVoice(info)
     info.voiceID = OutLoud.Database:GetVoice(info.family, info.sex)
     if info.voiceID == nil then
         info.reason = "voice-not-set"
+    elseif not VoiceSelection:IsVoiceAvailable(info.voiceID) then
+        info.reason = "voice-unavailable"
+        return nil, info
     end
     return info.voiceID, info
 end
@@ -61,13 +94,9 @@ local function ResolveSingleVoice(info)
         return nil, info
     end
 
-    if type(voiceID) == "number" and voiceID >= 0 and voiceID % 1 == 0 then
-        for _, voice in ipairs(OutLoud.TTS:GetVoices()) do
-            if voice.voiceID == voiceID then
-                info.voiceID = voiceID
-                return voiceID, info
-            end
-        end
+    if VoiceSelection:IsVoiceAvailable(voiceID) then
+        info.voiceID = voiceID
+        return voiceID, info
     end
     info.reason = "single-voice-unavailable"
     return nil, info

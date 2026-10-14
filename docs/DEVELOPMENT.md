@@ -11,6 +11,7 @@ On addon load, initialization prepares the database, Options, Talking Head UI,
 and QuestFrame/Quest Log integrations. `Core/Narration.lua` shares presentation
 ownership and TTS callbacks between the two UI entry points.
 The speech event frame is created on the first valid speech request.
+VoiceSelection creates a separate voice-list update observer during addon loading.
 The addon initialization frame unregisters `ADDON_LOADED` and releases its handler
 after setup. Quest integrations retain their own deferred-load observers only
 until the required Blizzard UI globals exist.
@@ -50,6 +51,29 @@ Unit availability and NPC model readiness still apply to speaker presentation:
 an unmapped NPC with a usable model stays the speaker, while missing/unready
 NPCs use the existing player presentation fallback with the same narrator voice.
 
+Both assignment modes now use `VoiceSelection:IsVoiceAvailable(voiceID)` against
+the same cached API list. An unavailable family assignment returns
+`voice-unavailable`; the existing QuestFrame player fallback still applies.
+An unavailable Single Voice never changes mode or chooses a different voice.
+Saved IDs are retained in both cases.
+
+`VoiceSelection:RefreshVoices()` is the centralized refresh entry point. It calls
+`TTS:RefreshVoices()`, updates the existing UI options table in place, and refreshes
+selected/disabled presentation without restarting narration or rebuilding rows.
+Refresh occurs on `VOICE_CHAT_TTS_VOICES_UPDATE` and Settings opening, with no
+polling or enumeration per streamed sentence. Native enumeration exceptions retain
+the last known list and release the reentrancy guard; the error is reported.
+The documented getter and update event support refreshing the addon's snapshot,
+but the local export does not guarantee native re-discovery of Windows voices
+installed or removed while the client is running. A client restart may be needed.
+
+Voice metadata exposes only `voiceID` and display `name`; no stable SAPI token is
+available in the local API export. Existing numeric assignments and SavedVariables
+remain compatible, with no migration or name matching (including duplicate names).
+ID stability across restart/enumeration changes is unverified. If the client reuses
+an ID for another voice, Out Loud cannot reliably detect/remap it from this schema;
+verify the displayed selection after changing installed voices.
+
 The Voice Assignment radio group uses the existing `UIRadioButtonTemplate`.
 Both configuration areas stay visible. `ComboBox:SetEnabled()` delegates to
 the native `SettingsDropdownWithButtonsTemplate` mixin, disabling the dropdown
@@ -88,7 +112,10 @@ Callers supply text and an already-resolved voice ID to the `OutLoud.TTS` single
   TTS alone.
 
 `TTS:SanitizeSpeechText(text)` replaces `/`, `\`, `|`, `_`, and `~` with spaces,
-collapses whitespace, and trims it. Punctuation and Unicode text are preserved.
+also replaces forbidden XML ASCII controls (`0x00`-`0x08`, `0x0B`, `0x0C`,
+`0x0E`-`0x1F`) with spaces, collapses whitespace, and trims it. Tab, LF, and CR
+continue through whitespace normalization. Punctuation and UTF-8 bytes are
+preserved. This is a control-byte filter, not a general UTF-8 validity parser.
 Both reading modes use this helper before payload construction. Speech is then
 escaped for XML text (`&`, `<`, `>`) before the unchanged ownership bookmark is
 prepended, so user text and pre-encoded entities cannot introduce markup.
@@ -148,17 +175,58 @@ disables Blizzard's line-separator sound once.
 
 Both modes share cancellation and monotonically increasing session IDs. Starting
 valid new speech cancels the active session before submitting immediately.
-Completed/cancelled session tables are discarded; bookmark session IDs recognize
-late stale audio without keeping a session history. Stale Out Loud audio triggers
-`StopSpeakingText()`. Because this API stops global playback, that emergency stop
-also cancels any newer Out Loud session instead of leaving it marked active.
+Completed/cancelled session tables are discarded, including their pending terminal
+event buffers. Old-session bookmarks are ignored. A late event is not evidence
+that stale audio is currently playing, so it no longer causes an emergency global
+stop that could interrupt newer narration or unrelated TTS. Explicit cancellation,
+replacement, and identified failures still use the API's global `StopSpeakingText()`.
 
 Only owned utterances can finish or fail a session. Native call errors are caught
 and printed in red regardless of the diagnostic flag. Bookmarks establish ownership. An
-asynchronous failure before the first ownership bookmark cannot be distinguished
-from unrelated TTS and does not change session state;
-use `Stop()` if a request fails before identification. Speech methods do not
+asynchronous failure before the first ownership bookmark cannot immediately be
+distinguished from unrelated TTS and does not change session state.
+Each session retains up to 128 recent terminal-event records by utterance ID,
+discarding the oldest records when full. An exact current-session ownership
+bookmark is required before a retained failure or finish can be applied.
+Duplicate events do not duplicate cleanup. A late finish is applied without
+restarting playback notifications, scrolling, or text transitions. In split mode,
+a recovered intermediate finish submits only the next sentence; completed chunk
+and utterance guards prevent repeated progression or resurrection.
+Unowned records are evidence to correlate later, never ownership by themselves.
+They do not survive session replacement; a discarded/evicted record cannot be
+recovered without another terminal event.
+
+The local `VoiceChatDocumentation.lua` documents no return value for `SpeakText`.
+`STARTED`, `FAILED`, `FINISHED`, and `VOICE_CHAT_TTS_SPEAK_TEXT_UPDATE` carry an
+utterance ID/status but no addon caller or submitted request token. The latter
+event is not used to infer ownership. `SynchronousEvent` metadata does not
+establish event order or correlate an event with a particular Lua call.
+Consequently, a failed request that never delivers its bookmark remains unresolved.
+Missing bookmarks also prevent reliable completion and split progression.
+No watchdog or timeout is added: there is no established safe generation/playback
+deadline for Pocket TTS or other engines, and a global stop could interrupt valid
+long-running narration or unrelated audio. Close Talking Head, call `TTS:Stop()`,
+or start replacement narration to release the session explicitly.
+
+The local Blizzard TTS implementation notes that purged utterances do not emit
+`FINISHED`. No documented purge notification or per-utterance cancellation API
+is exposed. Arbitrary external purges therefore remain undetectable; Lua cleanup
+cannot guarantee native silence after a failed global stop. Ignoring stale events
+protects new presentation/session state but cannot silence a non-cooperative engine.
+Speech methods do not
 extract quest text, resolve voices, or control Talking Head behavior.
+
+The user reported successful Pocket TTS and Microsoft Zira Desktop narration in
+both Full and Split modes before this hardening pass. The revised event recovery
+and voice-refresh paths have standalone/mock coverage, not new in-game verification.
+For manual regression checks, use each voice in both reading modes through manual
+and automatic QuestFrame narration and Quest Log. Verify spinner removal, original
+displayed text, sentence transitions/prefetch, completion, close/cancel, rapid
+replacement, and `/reload`. Open Settings again to refresh voices and confirm
+unavailable labels and retained assignments. Whether Windows voice changes cause
+the documented update event/native list refresh remains an in-game check; perform
+any voice installation/removal separately and manually. This addon never registers
+or unregisters SAPI engines.
 
 ## Development testing
 
@@ -175,6 +243,11 @@ saved settings, and addon load order. Speech tests mock the native
 engine and playback events to check streaming, mode dispatch, cancellation,
 stale/duplicate bookmarks, completion, failures, and input validation. Model
 loading, rendering, and actual audio still require in-game checks.
+Reliability checks cover terminal-before-bookmark recovery, duplicate completion,
+missing-bookmark isolation, bounded early-event retention, stale/reentrant callback
+safety, global-stop cleanup, and control-byte removal. Voice tests cover event and
+Settings refresh, shared menu/runtime availability, unchanged saved selections,
+duplicate display names, and enumeration exceptions without playback polling.
 Sanitization checks cover separator replacement, punctuation and Unicode,
 literal XML/entity escaping, original display callbacks, single-request full
 mode, split indexes/prefetch, and empty speech cleanup. Quest checks exercise

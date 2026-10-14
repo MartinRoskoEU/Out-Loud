@@ -97,7 +97,7 @@ function SettingsPage:CreateScrollContainer()
         self:UpdateScrollLayout()
     end)
     scroll:SetScript("OnShow", function()
-        self:RefreshVoiceAssignment()
+        OutLoud.VoiceSelection:RefreshVoices()
         self:UpdateScrollLayout()
     end)
 end
@@ -345,12 +345,14 @@ function SettingsPage:GetVoiceOptions()
         return self.VoiceOptions
     end
 
-    local options = {
-        {
-            label = "Not set",
-            value = nil,
-        },
-    }
+    return self:RefreshVoiceOptions()
+end
+
+function SettingsPage:RefreshVoiceOptions()
+    -- Existing dropdown callbacks share this table; refresh it in place.
+    local options = self.VoiceOptions or {}
+    for index = #options, 1, -1 do options[index] = nil end
+    options[1] = { label = "Not set", value = nil }
 
     for _, voice in ipairs(OutLoud.TTS:GetVoices()) do
         table.insert(options, {

@@ -3,6 +3,8 @@ local AddonName, OutLoud = ...
 local TTS = {}
 OutLoud.TTS = TTS
 
+local MAX_PENDING_TERMINALS = 128
+
 TTS.ReadingModes = {
     FULL = "full",
     SPLIT = "split",
@@ -13,8 +15,20 @@ function TTS:GetVoices()
         return self.Voices
     end
 
-    self.Voices = C_VoiceChat.GetTtsVoices() or {}
+    return self:RefreshVoices()
+end
 
+function TTS:RefreshVoices()
+    self.Voices = self.Voices or {}
+    if self.RefreshingVoices then return self.Voices end
+    self.RefreshingVoices = true
+    local ok, voices = pcall(C_VoiceChat.GetTtsVoices)
+    self.RefreshingVoices = false
+    if ok and type(voices) == "table" then
+        self.Voices = voices
+    else
+        OutLoud:Error("TTS voice enumeration failed; retaining the last available list:", tostring(voices))
+    end
     return self.Voices
 end
 
@@ -89,7 +103,9 @@ function TTS:SplitSentences(text)
 end
 
 function TTS:SanitizeSpeechText(text)
-    return (text:gsub("[/\\|_~]", " "):gsub("%s+", " ")
+    -- XML 1.0 forbids these ASCII controls, including NUL. UTF-8 bytes stay intact.
+    return (text:gsub("[%z\1-\8\11\12\14-\31]", " ")
+        :gsub("[/\\|_~]", " "):gsub("%s+", " ")
         :gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
@@ -150,6 +166,10 @@ function TTS:StartSession(mode, voiceID, onSessionEnded, onPlaybackStarted, onTe
         mode = mode,
         voiceID = voiceID,
         utterances = {},
+        completedTokens = {},
+        completedUtterances = {},
+        pendingTerminals = {},
+        pendingTerminalOrder = {},
         onSessionEnded = onSessionEnded,
         onPlaybackStarted = onPlaybackStarted,
         onTextProgress = onTextProgress,
@@ -283,16 +303,39 @@ function TTS:GetBookmarkSession(sessionID)
     if session and session.id == sessionID then
         return session
     end
-    -- The counter recognizes stale owned audio after old session tables are discarded.
-    if sessionID > 0 and sessionID <= self.SessionID then
-        if not self:Stop() then
-            StopPlayback(self)
+    -- A stale notification is not proof of current audio. Never globally stop
+    -- newer narration or unrelated TTS because an old bookmark was delivered.
+end
+
+local function RememberTerminal(session, event, utteranceID, status)
+    if type(utteranceID) ~= "number" or utteranceID ~= utteranceID
+        or session.completedUtterances[utteranceID] then
+        return
+    end
+
+    local pending = session.pendingTerminals[utteranceID]
+    if pending then
+        if event == "VOICE_CHAT_TTS_PLAYBACK_FAILED" then
+            pending.event, pending.status = event, status
+        end
+        return
+    end
+
+    local order = session.pendingTerminalOrder
+    if #order >= MAX_PENDING_TERMINALS then
+        local oldest = table.remove(order, 1)
+        if session.pendingTerminals[oldest.utteranceID] == oldest then
+            session.pendingTerminals[oldest.utteranceID] = nil
         end
     end
+    pending = { event = event, utteranceID = utteranceID, status = status }
+    session.pendingTerminals[utteranceID] = pending
+    order[#order + 1] = pending
 end
 
 function TTS:OnBookmark(utteranceID, bookmark)
-    if type(bookmark) ~= "string" or type(utteranceID) ~= "number" then
+    if type(bookmark) ~= "string" or type(utteranceID) ~= "number"
+        or utteranceID ~= utteranceID then
         return
     end
 
@@ -312,26 +355,38 @@ function TTS:OnBookmark(utteranceID, bookmark)
             return
         end
 
-        if not session.utterances[utteranceID] then
-            OutLoud:Debug("TTS playback identified: session:", sessionID, "chunk:", chunk, "utterance:", utteranceID)
+        token = chunk
+    elseif token ~= "WHOLE" then
+        return
+    end
+
+    if session.completedTokens[token] or session.completedUtterances[utteranceID] then
+        return
+    end
+    local identified = session.utterances[utteranceID]
+    if identified and identified ~= token then return end
+    session.utterances[utteranceID] = token
+
+    -- Only this matching bookmark proves ownership of a previously seen event.
+    local pending = session.pendingTerminals[utteranceID]
+    if pending then
+        session.pendingTerminals[utteranceID] = nil
+        self:OnEvent(pending.event, utteranceID, pending.status)
+        if self.CurrentSession == session and session.mode == self.ReadingModes.SPLIT then
+            self:SubmitChunk(session, chunk + 1)
         end
-        session.utterances[utteranceID] = chunk
-        NotifyPlaybackStarted(session)
-        if not session.activeToken or chunk > session.activeToken then
-            session.activeToken = chunk
-            NotifyTextProgress(self, session, chunk, 0)
-        end
+        return
+    end
+
+    OutLoud:Debug("TTS playback identified: session:", sessionID, "chunk:", token, "utterance:", utteranceID)
+    NotifyPlaybackStarted(session)
+    if self.CurrentSession ~= session then return end
+    if not session.activeToken or (chunk and chunk > session.activeToken) then
+        session.activeToken = token
+        NotifyTextProgress(self, session, token, 0)
+    end
+    if session.mode == self.ReadingModes.SPLIT then
         self:SubmitChunk(session, chunk + 1)
-    elseif token == "WHOLE" then
-        if not session.utterances[utteranceID] then
-            OutLoud:Debug("TTS playback identified: session:", sessionID, "whole text, utterance:", utteranceID)
-        end
-        session.utterances[utteranceID] = token
-        NotifyPlaybackStarted(session)
-        if not session.activeToken then
-            session.activeToken = token
-            NotifyTextProgress(self, session, token, 0)
-        end
     end
 end
 
@@ -359,6 +414,11 @@ function TTS:OnEvent(event, utteranceID, bookmark)
     end
 
     local token = session.utterances[utteranceID]
+    if token and session.completedTokens[token] then
+        session.utterances[utteranceID] = nil
+        session.completedUtterances[utteranceID] = true
+        return
+    end
 
     if event == "VOICE_CHAT_TTS_PLAYBACK_STARTED" then
         OutLoud:Debug("TTS PLAYBACK_STARTED: utterance:", tostring(utteranceID),
@@ -372,11 +432,18 @@ function TTS:OnEvent(event, utteranceID, bookmark)
             session.failed = true
             self:Stop()
         else
-            OutLoud:Debug("Failure is unidentified and may belong to other TTS; session state left unchanged.")
+            RememberTerminal(session, event, utteranceID, bookmark)
+            OutLoud:Debug("Failure is unidentified; retained pending a matching ownership bookmark.")
         end
-    elseif event == "VOICE_CHAT_TTS_PLAYBACK_FINISHED" and token then
+    elseif event == "VOICE_CHAT_TTS_PLAYBACK_FINISHED" then
+        if not token then
+            RememberTerminal(session, event, utteranceID)
+            return
+        end
         OutLoud:Debug("TTS playback finished: session:", session.id, "chunk:", token, "utterance:", utteranceID)
         session.utterances[utteranceID] = nil
+        session.completedTokens[token] = true
+        session.completedUtterances[utteranceID] = true
 
         if token == "WHOLE" or token == session.lastChunk then
             session.finished = true

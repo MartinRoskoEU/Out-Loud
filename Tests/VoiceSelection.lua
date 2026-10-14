@@ -13,10 +13,12 @@ local function Equal(actual, expected, message)
 end
 
 local function Frame(parent)
-    local frame = { scripts = {}, points = {}, callbacks = {}, parent = parent, shown = true,
+    local frame = { scripts = {}, points = {}, callbacks = {}, events = {}, parent = parent, shown = true,
         heightValue = 0, widthValue = 800, scrollValue = 0, enabled = true }
     local methods = {
         SetScript = function(self, event, callback) self.scripts[event] = callback end,
+        RegisterEvent = function(self, event) self.events[event] = true end,
+        UnregisterEvent = function(self, event) self.events[event] = nil end,
         HookScript = function(self, event, callback)
             local previous = self.scripts[event]
             self.scripts[event] = function(...)
@@ -160,12 +162,13 @@ for _, font in ipairs({ "GameFontNormal", "GameFontHighlight", "GameFontHighligh
     "GameFontDisable", "GameFontDisableSmall" }) do
     environment[font] = font
 end
+local availableVoices, enumerations = {}, 0
+for id = 0, 60 do
+    availableVoices[#availableVoices + 1] = { voiceID = id, name = "Voice " .. id }
+end
 environment.C_VoiceChat = { GetTtsVoices = function()
-    local voices = {}
-    for id = 0, 60 do
-        table.insert(voices, { voiceID = id, name = "Voice " .. id })
-    end
-    return voices
+    enumerations = enumerations + 1
+    return availableVoices
 end }
 
 local addon = {}
@@ -455,6 +458,57 @@ addon.Database:SetVoiceMode("invalid")
 Equal(addon.Database:GetVoiceMode(), "raceGender", "Invalid modes normalize to the existing behavior")
 settingsPage:RefreshVoiceAssignment()
 
+-- Voice updates refresh the existing shared menus without touching saved IDs or playback.
+local originalVoices = availableVoices
+local sharedOptions = settingsPage:GetVoiceOptions()
+local activeSession = { id = 123, voiceID = 50 }
+addon.TTS.CurrentSession = activeSession
+Equal(selection.Frame.events.VOICE_CHAT_TTS_VOICES_UPDATE, true, "Observe the documented voice-update event")
+availableVoices = { { voiceID = 20, name = "Voice 20" }, { voiceID = 61, name = "Third-party voice" } }
+local beforeRefresh = enumerations
+selection.Frame.scripts.OnEvent(selection.Frame, "VOICE_CHAT_TTS_VOICES_UPDATE")
+Equal(enumerations, beforeRefresh + 1, "Voice-update event performs one enumeration")
+Equal(settingsPage:GetVoiceOptions(), sharedOptions, "Existing selector callbacks retain the same options table")
+Equal(#sharedOptions, 3)
+Equal(addon.TTS.CurrentSession, activeSession, "Refreshing availability leaves active playback untouched")
+local newNarratorEntries = MenuEntries(narrator)
+local newFamilyEntries = MenuEntries(settingsPage.VoiceRows[1].MaleComboBox)
+Equal(newNarratorEntries[3].value, 61, "New third-party voice appears in the narrator selector")
+Equal(newFamilyEntries[3].value, 61, "The same new voice appears in family selectors")
+local unavailableVoice, unavailableInfo = selection:Resolve("questnpc", model)
+Equal(unavailableVoice, nil)
+Equal(unavailableInfo.reason, "voice-unavailable", "Removed family voice fails gracefully")
+Equal(addon.Database:GetVoice("UNDEAD", 2), 50, "Unavailable family assignment is preserved")
+local humanRow
+for _, row in ipairs(settingsPage.VoiceRows) do
+    if row.RaceLabel.textValue == "Human" then humanRow = row end
+end
+Equal(humanRow.MaleComboBox.Dropdown.textValue, "Unavailable (voice 0)")
+settingsPage.SingleVoiceButton.scripts.OnClick()
+newNarratorEntries[3].set(61)
+Equal(selection:ResolvePlayer(), 61, "Runtime resolution uses the refreshed availability")
+Equal(enumerations, beforeRefresh + 1, "Resolution does not continuously enumerate voices")
+
+-- No name matching or reassignment, including ambiguous duplicate names.
+addon.Database:SetSingleVoice(20)
+availableVoices = { { voiceID = 61, name = "Duplicate voice" }, { voiceID = 62, name = "Duplicate voice" } }
+selection.Frame.scripts.OnEvent(selection.Frame, "VOICE_CHAT_TTS_VOICES_UPDATE")
+unavailableVoice, unavailableInfo = selection:ResolvePlayer()
+Equal(unavailableVoice, nil)
+Equal(unavailableInfo.reason, "single-voice-unavailable")
+Equal(addon.Database:GetSingleVoice(), 20, "Do not replace a missing voice with an ambiguous name match")
+Equal(narrator.Dropdown.textValue, "Unavailable (voice 20)")
+availableVoices = originalVoices
+beforeRefresh = enumerations
+settingsPage.ScrollFrame:Hide()
+settingsPage.ScrollFrame:Show()
+Equal(enumerations, beforeRefresh + 1, "Settings opening explicitly refreshes availability")
+Equal(selection:ResolvePlayer(), 20, "A restored voice resolves without rewriting its saved ID")
+Equal(narrator.Dropdown.textValue, "Voice 20")
+Equal(addon.TTS.CurrentSession, activeSession)
+addon.TTS.CurrentSession = nil
+settingsPage.RaceGenderButton.scripts.OnClick()
+
 -- Empty exports still anchor the Reading section safely.
 addon.VoiceMappings.Families = {}
 local anchor = settingsPage.VoicesColumns
@@ -514,8 +568,8 @@ settingsPage.ScrollFrame:SetWidth(600)
 settingsPage:UpdateScrollLayout()
 Equal(settingsPage.Content:GetWidth(), 600, "Content follows viewport width")
 Equal(settingsPage.SplitDescription:GetWidth(), 555, "Descriptions fit narrower content")
-Equal(settingsPage.VoiceRows[1].MaleComboBox.Frame:GetWidth(), 218, "Voice columns fit narrower viewport")
-Equal(settingsPage.VoiceRows[1].MaleComboBox.Dropdown:GetWidth(), 138, "Dropdown follows control width")
+Equal(settingsPage.VoiceRows[1].MaleComboBox.Frame:GetWidth(), 207.5, "Voice columns fit the current indented layout")
+Equal(settingsPage.VoiceRows[1].MaleComboBox.Dropdown:GetWidth(), 127.5, "Dropdown follows control width")
 settingsPage.ScrollFrame:SetWidth(760)
 settingsPage:UpdateScrollLayout()
 Equal(settingsPage.VoiceRows[1].MaleComboBox.Frame:GetWidth(), 250, "Existing sizing restored when it fits")

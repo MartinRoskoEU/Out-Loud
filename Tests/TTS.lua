@@ -64,6 +64,7 @@ local function Harness()
     addon.Database:Initialize()
     test.tts = addon.TTS
     test.db = addon.Database
+    test.environment = environment
     -- No classifier or NPC/quest API is available to the controller.
     addon.VoiceSelection = nil
 
@@ -189,16 +190,16 @@ for _, modes in ipairs({
     end)
 end
 
-Test("Stale bookmarks stop playback without restarting old prefetch", function()
+Test("Stale bookmarks cannot stop newer playback or restart old prefetch", function()
     local test = Harness()
     test.tts:SpeakStreaming(text, 7)
     test.tts:SpeakStreaming("New sentence. Another sentence.", 7)
     local replacement = test.tts.CurrentSession
     test:Bookmark(1, 101)
     Equal(#test.calls, 2)
-    Equal(test.stops, 2, "Emergency stop after cancellation")
-    Equal(replacement.cancelled, true, "Global stop also cancels newer narration")
-    Equal(test.tts.CurrentSession, nil, "Do not keep a globally stopped session active")
+    Equal(test.stops, 1, "Only the explicit replacement stops playback")
+    Equal(replacement.cancelled, nil)
+    Equal(test.tts.CurrentSession, replacement, "An old notification cannot cancel newer narration")
     test.tts:SpeakWholeText("Fresh narration.", 7)
     Equal(#test.calls, 3, "Ready to start again")
 end)
@@ -208,7 +209,7 @@ Test("Late bookmarks remain recognizable after Stop and cleanup", function()
     test.tts:SpeakWholeText(text, 7)
     test.tts:Stop()
     test:Bookmark(1, 101)
-    Equal(test.stops, 2)
+    Equal(test.stops, 1, "Late bookmarks do not stop unrelated playback")
     Equal(test.tts.CurrentSession, nil)
     Equal(#test.calls, 1)
 end)
@@ -399,7 +400,7 @@ Test("An identified intermediate failure cancels prefetched audio", function()
     Equal(test.stops, 1)
     test:Bookmark(3, 103)
     Equal(#test.calls, 3, "Late prefetched audio cannot continue the failed session")
-    Equal(test.stops, 2, "Late audio is stopped")
+    Equal(test.stops, 1, "A late notification cannot justify another global stop")
 end)
 
 Test("Synchronous cancellation events cannot end the replacement session", function()
@@ -430,7 +431,7 @@ Test("Repeated sessions retain only the current session", function()
     Equal(test.tts.bookmarkInfo, nil)
     Equal(test.tts.utteranceInfo, nil)
     test:Bookmark(1, 101)
-    Equal(test.stops, 1, "Old output is recognized after cleanup")
+    Equal(test.stops, 0, "Old notifications are ignored after cleanup")
 end)
 
 Test("Display callback retains full original text while speech is sanitized and escaped", function()
@@ -529,7 +530,7 @@ Test("Sanitized streaming preserves original sentences, indexes, and one-ahead p
     Equal(ended, 1, "Do not wait for an empty sentence's missing bookmark")
     test:Bookmark(1, 101)
     Equal(#test.calls, 3, "Stale bookmarks cannot restart sanitized speech")
-    Equal(test.stops, 1, "Stale owned audio still triggers the existing stop")
+    Equal(test.stops, 0, "Completed speech cannot cause a global stop")
     Equal(ended, 1)
 end)
 
@@ -598,6 +599,223 @@ Test("Display callbacks tolerate reentrant cancellation and synchronous playback
     end)
     Equal(updates, 1)
     Equal(test.calls[1].spoken, text)
+end)
+
+Test("Early failures wait for ownership and then clean up once in both modes", function()
+    for _, method in ipairs({ "SpeakWholeText", "SpeakStreaming" }) do
+        local test = Harness()
+        local ended, started, updates = {}, 0, 0
+        test.tts[method](test.tts, text, 7, function(reason) ended[#ended + 1] = reason end,
+            function() started = started + 1 end, function() updates = updates + 1 end)
+        local session = test.tts.CurrentSession
+        test:Event("FAILED", 999, 13)
+        test:Event("FAILED", 101, 13)
+        test:Event("FAILED", 101, 13)
+        Equal(test.tts.CurrentSession, session, "Unidentified failures cannot claim narration")
+        Equal(test.stops, 0)
+        Equal(#ended, 0)
+        test:Bookmark(1, 101)
+        Equal(test.tts.CurrentSession, nil)
+        Equal(session.failed, true)
+        Equal(ended[1], "failed")
+        Equal(#ended, 1)
+        Equal(test.stops, 1)
+        Equal(started, 0, "Late ownership cannot restart failed playback")
+        Equal(updates, 0)
+        Equal(#test.calls, 1, "Failed speech cannot prefetch")
+        test:Event("FAILED", 101, 13)
+        test:Bookmark(1, 101)
+        Equal(#ended, 1)
+        Equal(test.stops, 1)
+    end
+end)
+
+Test("Finish before whole bookmark completes without restarting display or newer narration", function()
+    local test = Harness()
+    local ended, started, updates = {}, 0, 0
+    test.tts:SpeakWholeText(text, 7, function(reason)
+        ended[#ended + 1] = reason
+        test.tts:SpeakWholeText("Replacement.", 8)
+    end, function() started = started + 1 end, function() updates = updates + 1 end)
+    test:Event("FINISHED", 101)
+    test:Event("FINISHED", 101)
+    assert(test.tts.CurrentSession, "Early completion awaits ownership")
+    test:Bookmark(1, 101)
+    local replacement = test.tts.CurrentSession
+    Equal(replacement.id, 2)
+    Equal(ended[1], "finished")
+    Equal(#ended, 1)
+    Equal(started, 0)
+    Equal(updates, 0, "Do not restart scrolling for completed speech")
+    test:Bookmark(1, 101)
+    test:Event("FINISHED", 101)
+    test:Event("FAILED", 101, 13)
+    Equal(test.tts.CurrentSession, replacement, "Old events cannot complete or fail a replacement")
+    Equal(#test.calls, 2)
+    Equal(test.stops, 0)
+end)
+
+Test("Streaming recovers early finishes without duplicate progression or display", function()
+    local test = Harness()
+    local ended, updates = {}, 0
+    test.tts:SpeakStreaming(text, 7, function(reason) ended[#ended + 1] = reason end,
+        nil, function() updates = updates + 1 end)
+    local session = test.tts.CurrentSession
+    for index = 1, 3 do
+        Equal(#test.calls, index)
+        test:Event("FINISHED", 100 + index)
+        test:Event("FINISHED", 100 + index)
+        test:Bookmark(index, 100 + index)
+        Equal(session.completedTokens[index], true)
+        Equal(#test.calls, math.min(3, index + 1), "Only one next sentence is submitted")
+        test:Bookmark(index, 100 + index)
+        test:Event("FINISHED", 100 + index)
+        test:Event("FAILED", 100 + index, 13)
+        if index < 3 then Equal(test.tts.CurrentSession, session) end
+    end
+    Equal(test.tts.CurrentSession, nil)
+    Equal(ended[1], "finished")
+    Equal(#ended, 1)
+    Equal(updates, 0, "Already finished sentences cannot restart text flow")
+    Equal(test.stops, 0)
+end)
+
+Test("Completed intermediate chunks reject late bookmarks and duplicate terminal events", function()
+    local test = Harness()
+    local updates = 0
+    test.tts:SpeakStreaming(text, 7, nil, nil, function() updates = updates + 1 end)
+    test:Bookmark(1, 101)
+    test:Event("FINISHED", 101)
+    test:Bookmark(1, 101)
+    test:Bookmark(1, 999)
+    test:Event("FAILED", 101, 13)
+    Equal(updates, 1)
+    Equal(#test.calls, 2)
+    Equal(test.stops, 0)
+    Equal(test.tts.CurrentSession.utterances[101], nil)
+    test:Bookmark(2, 102)
+    Equal(updates, 2)
+    Equal(#test.calls, 3)
+end)
+
+Test("Missing bookmarks preserve isolation and pending events do not cross sessions", function()
+    for _, method in ipairs({ "SpeakWholeText", "SpeakStreaming" }) do
+        local test = Harness()
+        local ended, started = 0, 0
+        test.tts[method](test.tts, text, 7, function() ended = ended + 1 end,
+            function() started = started + 1 end)
+        local session = test.tts.CurrentSession
+        test:Event("STARTED", 101)
+        test:Event("FINISHED", 101)
+        test:Event("FAILED", 999, 13)
+        Equal(test.tts.CurrentSession, session, "No safe completion without a matching bookmark")
+        Equal(#test.calls, 1)
+        Equal(ended, 0)
+        Equal(started, 0)
+        Equal(test.stops, 0)
+        test.tts:SpeakWholeText("New narration.", 8)
+        local replacement = test.tts.CurrentSession
+        Equal(ended, 1, "Explicit replacement cleans up the pending narration")
+        Equal(test.stops, 1)
+        Equal(replacement.pendingTerminals[101], nil, "Do not retain old terminal events")
+        test:Bookmark(1, 101)
+        Equal(test.tts.CurrentSession, replacement)
+        test:Bookmark(2, 101)
+        Equal(test.tts.CurrentSession, replacement, "Even a reused ID cannot replay an old cached finish")
+        test.tts:Stop()
+        Equal(test.tts:Stop(), false)
+        Equal(test.stops, 2)
+    end
+end)
+
+Test("Unowned terminal history stays bounded and requires an exact bookmark", function()
+    local test = Harness()
+    local ended = 0
+    test.tts:SpeakWholeText(text, 7, function() ended = ended + 1 end)
+    for id = 1, 1000 do test:Event("FINISHED", id) end
+    local session = test.tts.CurrentSession
+    Equal(#session.pendingTerminalOrder, 128)
+    local count = 0
+    for _ in pairs(session.pendingTerminals) do count = count + 1 end
+    Equal(count, 128)
+    test:Event("BOOKMARK", 1000, "OTHER:1:WHOLE")
+    Equal(test.tts.CurrentSession, session)
+    Equal(ended, 0)
+    test:Bookmark(1, 1000)
+    Equal(test.tts.CurrentSession, nil)
+    Equal(ended, 1)
+    Equal(test.stops, 0)
+end)
+
+Test("Cancellation from playback-start callback cannot prefetch", function()
+    local test = Harness()
+    test.tts:SpeakStreaming(text, 7, nil, function() test.tts:Stop() end)
+    test:Bookmark(1, 101)
+    Equal(test.tts.CurrentSession, nil)
+    Equal(#test.calls, 1)
+    Equal(test.stops, 1)
+end)
+
+Test("Voice refresh is explicit, reentrant-safe, and retains the cache on enumeration errors", function()
+    local test = Harness()
+    local voices, enumerations = { { voiceID = 7, name = "Zira" } }, 0
+    test.environment.C_VoiceChat.GetTtsVoices = function()
+        enumerations = enumerations + 1
+        test.tts:RefreshVoices()
+        return voices
+    end
+    Equal(test.tts:GetVoices(), voices)
+    Equal(enumerations, 1)
+    test.tts:GetVoices()
+    test.tts:SpeakStreaming(text, 7)
+    test:Bookmark(1, 101)
+    Equal(enumerations, 1, "Normal playback never continuously enumerates voices")
+    voices = { { voiceID = 8, name = "Another voice" } }
+    Equal(test.tts:RefreshVoices(), voices)
+    Equal(enumerations, 2)
+    test.environment.C_VoiceChat.GetTtsVoices = function() error("Enumeration failed") end
+    Equal(test.tts:RefreshVoices(), voices, "A failed query cannot erase the known list")
+    Equal(test.tts.RefreshingVoices, false)
+end)
+
+Test("XML control bytes are replaced without changing Unicode, escaping, or display text", function()
+    local controls = ""
+    for byte = 0, 31 do
+        if byte ~= 9 and byte ~= 10 and byte ~= 13 then controls = controls .. string.char(byte) end
+    end
+    local original = "Café" .. controls .. "/\\|_~ & <gate> — don't stop!\n中文\tEnd."
+    local spoken = "Café &amp; &lt;gate&gt; — don't stop! 中文 End."
+    for _, method in ipairs({ "SpeakWholeText", "SpeakStreaming" }) do
+        local test = Harness()
+        local display = {}
+        test.tts[method](test.tts, original, 7, nil, nil,
+            function(value) display[#display + 1] = value end)
+        local sentences = test.tts:SplitSentences(original)
+        test:Bookmark(1, 101)
+        if method == "SpeakWholeText" then
+            Equal(#test.calls, 1)
+            Equal(test.calls[1].spoken, spoken)
+            Equal(display[1], original, "Original full display retains every input byte")
+        else
+            test:Bookmark(2, 102)
+            Equal(#test.calls, 2)
+            Equal(test.calls[1].spoken, "Café &amp; &lt;gate&gt; — don't stop!")
+            Equal(test.calls[2].spoken, "中文 End.")
+            Equal(display[1], sentences[1], "Keep existing original sentence normalization")
+            Equal(display[2], sentences[2])
+        end
+        for _, call in ipairs(test.calls) do
+            for index = 1, #call.text do
+                local byte = call.text:byte(index)
+                assert(byte >= 32 or byte == 9 or byte == 10 or byte == 13, "No forbidden XML ASCII controls")
+            end
+        end
+        local count = #test.calls
+        local ok, reason = test.tts[method](test.tts, controls, 7)
+        Equal(ok, false)
+        Equal(reason, "invalid-text")
+        Equal(#test.calls, count, "Control-only input cannot create a request")
+    end
 end)
 
 print("PASS: " .. passed .. " speech controller checks")

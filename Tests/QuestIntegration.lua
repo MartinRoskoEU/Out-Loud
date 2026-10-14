@@ -743,4 +743,33 @@ Test("Deferred Blizzard UI installs once after its globals exist", function()
     Equal(#h.environment.QuestFrame.hooks.OnEvent, 1, "One event hook")
 end)
 
+Test("Late ownership resolves early terminal events and cleans up Talking Head", function()
+    for _, mode in ipairs({ "full", "split" }) do
+        for _, event in ipairs({ "FAILED", "FINISHED" }) do
+            local h = Harness(false, true)
+            h.texts.detail = "Only sentence."
+            h.addon.Database:SetReadingMode(mode)
+            h.environment.QuestFrame:Show()
+            h:Panel("QuestFrameDetailPanel")
+            h:Click()
+            local tts, head = h.addon.TTS, h.addon.UI.TalkingHead
+            local session = tts.CurrentSession
+            tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_" .. event, 101, 13)
+            Equal(tts.CurrentSession, session, "Unidentified terminal events do not claim narration")
+            Equal(head.shown, true)
+            Equal(head.loading, true)
+            local mark = "OUTLOUD:SPEECH:" .. session.id .. ":" .. (mode == "full" and "WHOLE" or "1")
+            tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 101, mark)
+            Equal(tts.CurrentSession, nil)
+            Equal(head.shown, false, "Proven terminal event closes Talking Head")
+            Equal(head.loading, false, "Cleanup clears the spinner")
+            Equal(h.endReason, event == "FAILED" and "failed" or "finished")
+            Equal(#h.progress, 0, "Late bookmark cannot restart scrolling or sentence transitions")
+            local stops = h.stops
+            tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 101, mark)
+            Equal(h.stops, stops, "Late notifications never call global stop")
+        end
+    end
+end)
+
 print("QuestIntegration: " .. passed .. " mocked checks passed")
