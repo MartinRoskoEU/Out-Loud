@@ -8,7 +8,8 @@ local AUTO_NARRATION_DESCRIPTION = "Automatically starts narration when opening 
 local AUTO_DELAY_DESCRIPTION = "Waits before automatically starting quest narration, allowing existing NPC dialogue to finish first. This delay does not affect manual narration."
 
 local VOICES_LAYOUT = {
-    leftPadding = 10,
+    -- Align family labels with the radio descriptions and narrator controls.
+    leftPadding = 31,
     rightPadding = 0,
 
     raceWidth = 120,
@@ -32,8 +33,10 @@ function SettingsPage:Initialize()
     self:CreateScrollContainer()
     self:CreateHeader()
 
+    self:CreateVoiceAssignmentSection()
     local voicesAnchor = self:CreateVoicesSection()
     self:CreateReadingSection(voicesAnchor)
+    self:RefreshVoiceAssignment()
     self:UpdateScrollLayout()
 
     self.Initialized = true
@@ -94,6 +97,7 @@ function SettingsPage:CreateScrollContainer()
         self:UpdateScrollLayout()
     end)
     scroll:SetScript("OnShow", function()
+        self:RefreshVoiceAssignment()
         self:UpdateScrollLayout()
     end)
 end
@@ -115,6 +119,11 @@ function SettingsPage:UpdateScrollLayout()
     self:UpdateVoiceWidths(content:GetWidth())
     -- Keep the existing description width unless the viewport requires wrapping.
     local descriptionWidth = math.max(1, math.min(620, content:GetWidth() - 45))
+    for _, description in ipairs({
+        self.SingleVoiceDescription, self.RaceGenderDescription, self.NarratorVoiceDescription,
+    }) do
+        description:SetWidth(descriptionWidth)
+    end
     self.FullDescription:SetWidth(descriptionWidth)
     self.SplitDescription:SetWidth(descriptionWidth)
     if self.AutoNarrateDescription then
@@ -145,6 +154,7 @@ function SettingsPage:UpdateScrollLayout()
 end
 
 function SettingsPage:UpdateVoiceWidths(contentWidth)
+    self.VoicesColumns:SetWidth(math.max(1, contentWidth - 14))
     -- Preserve the 250-pixel controls unless the scrollbar gutter makes them crowd.
     local available = contentWidth - 14 - VOICES_LAYOUT.leftPadding
         - VOICES_LAYOUT.raceWidth - VOICES_LAYOUT.rightPadding
@@ -174,21 +184,94 @@ function SettingsPage:CreateHeader()
     divider:SetAtlas("Options_HorizontalDivider", true)
 end
 
-function SettingsPage:CreateVoicesSection()
-    local header = CreateFrame(
-        "Frame",
-        nil,
-        self.Content,
-        "SettingsListSectionHeaderTemplate"
-    )
-
+function SettingsPage:CreateVoiceAssignmentSection()
+    local header = CreateFrame("Frame", nil, self.Content, "SettingsListSectionHeaderTemplate")
     header:SetPoint("TOPLEFT", 7, -70)
     header:SetPoint("TOPRIGHT", -7, -70)
-    header.Title:SetText("Voices")
+    header.Title:SetText("Voice Assignment")
+    self.VoiceAssignmentHeader = header
 
+    local modes = OutLoud.VoiceSelection.AssignmentModes
+    local previous = header
+    for _, option in ipairs({
+        { mode = modes.SINGLE, label = "Single Voice", key = "SingleVoice",
+            description = "Use one selected voice for all narration, regardless of the speaker's family or gender." },
+        { mode = modes.RACE_GENDER, label = "Multiple Voices", key = "RaceGender",
+            description = "Assign different voices based on the speaker's family and gender." },
+    }) do
+        local mode = option.mode
+        local button = CreateFrame("CheckButton", nil, self.Content, "UIRadioButtonTemplate")
+        button:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", previous == header and 10 or -21, -16)
+        button.text:SetFontObject(GameFontNormal)
+        button.text:SetText(option.label)
+        button:SetScript("OnClick", function()
+            OutLoud.Database:SetVoiceMode(mode)
+            self:RefreshVoiceAssignment()
+        end)
+
+        local description = self.Content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+        description:SetPoint("TOPLEFT", button, "BOTTOMLEFT", 21, -5)
+        description:SetWidth(620)
+        description:SetJustifyH("LEFT")
+        description:SetJustifyV("TOP")
+        description:SetWordWrap(true)
+        description:SetText(option.description)
+        self[option.key .. "Button"] = button
+        self[option.key .. "Description"] = description
+        previous = description
+    end
+
+    local label = self.Content:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    label:SetPoint("TOPLEFT", self.SingleVoiceDescription, "BOTTOMLEFT", 0, -18)
+    label:SetText("Narrator Voice")
+    local combo = OutLoud.Classes.ComboBox:New(self.Content, VOICES_LAYOUT.voiceControlWidth)
+    combo.Frame:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -8)
+    combo:Setup(self:GetVoiceOptions(), function()
+        return OutLoud.Database:GetSingleVoice()
+    end, function(voiceID)
+        OutLoud.Database:SetSingleVoice(voiceID)
+    end)
+
+    local description = self.Content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    description:SetPoint("TOPLEFT", combo.Frame, "BOTTOMLEFT", 0, -8)
+    description:SetWidth(620)
+    description:SetJustifyH("LEFT")
+    description:SetJustifyV("TOP")
+    description:SetWordWrap(true)
+    description:SetText("Select the voice used for all quest narration.")
+    self.SingleVoiceComboBox = combo
+    self.NarratorVoiceLabel = label
+    self.NarratorVoiceDescription = description
+
+    self.RaceGenderButton:ClearAllPoints()
+    self.RaceGenderButton:SetPoint("TOPLEFT", description, "BOTTOMLEFT", -21, -24)
+end
+
+function SettingsPage:RefreshVoiceAssignment()
+    if not self.SingleVoiceComboBox then return end
+    local single = OutLoud.VoiceSelection:IsSingleVoiceMode()
+    self.SingleVoiceButton:SetChecked(single)
+    self.RaceGenderButton:SetChecked(not single)
+    self.SingleVoiceComboBox:SetEnabled(single)
+    self.SingleVoiceComboBox:Refresh()
+    self.NarratorVoiceLabel:SetFontObject(single and GameFontNormal or GameFontDisable)
+    self.NarratorVoiceDescription:SetFontObject(single and GameFontHighlightSmall or GameFontDisableSmall)
+    for _, row in ipairs(self.VoiceRows or {}) do
+        row:SetEnabled(not single)
+        row.MaleComboBox:Refresh()
+        row.FemaleComboBox:Refresh()
+    end
+    if self.VoicesMaleLabel then
+        self.VoicesFamilyLabel:SetFontObject(single and GameFontDisable or GameFontNormal)
+        self.VoicesMaleLabel:SetFontObject(single and GameFontDisable or GameFontNormal)
+        self.VoicesFemaleLabel:SetFontObject(single and GameFontDisable or GameFontNormal)
+    end
+end
+
+function SettingsPage:CreateVoicesSection()
     local columns = CreateFrame("Frame", nil, self.Content)
-    columns:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -4)
-    columns:SetPoint("TOPRIGHT", header, "BOTTOMRIGHT", 0, -4)
+    columns:SetPoint("TOPLEFT", self.RaceGenderDescription, "BOTTOMLEFT", -VOICES_LAYOUT.leftPadding, -18)
+    columns:SetWidth(math.max(1, self.Content:GetWidth() - 14))
     columns:SetHeight(32)
 
     local raceLabel = columns:CreateFontString(
@@ -249,7 +332,7 @@ function SettingsPage:CreateVoicesSection()
 
     femaleLabel:SetText("Female")
 
-    self.VoicesHeader = header
+    self.VoicesFamilyLabel = raceLabel
     self.VoicesColumns = columns
     self.VoicesMaleLabel = maleLabel
     self.VoicesFemaleLabel = femaleLabel
@@ -296,25 +379,6 @@ function SettingsPage:CreateVoiceRows(anchor)
 
     for _, family in ipairs(families) do
         local currentFamily = family
-
-        for _, gender in pairs(selection.Genders) do
-            local voiceID = OutLoud.Database:GetVoice(currentFamily, gender)
-
-            if voiceID ~= nil then
-                local available = false
-
-                for _, option in ipairs(voiceOptions) do
-                    if option.value == voiceID then
-                        available = true
-                        break
-                    end
-                end
-
-                if not available then
-                    OutLoud.Database:SetVoice(currentFamily, gender, nil)
-                end
-            end
-        end
 
         local row = OutLoud.Classes.VoiceRow:New(
             self.Content,
@@ -395,6 +459,7 @@ function SettingsPage:CreateVoiceRows(anchor)
     end
 
     local lastFrame = previousFrame or anchor
+    self:RefreshVoiceAssignment()
     if self.ReadingHeader then
         self:AnchorReadingSection(lastFrame)
         self:UpdateScrollLayout()

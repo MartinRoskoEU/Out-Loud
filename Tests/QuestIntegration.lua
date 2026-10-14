@@ -46,6 +46,7 @@ local panelNames = {
 local function Harness(deferred, realTTS)
     local h = { created = {}, speech = {}, heads = {}, flow = {}, diagnostics = {}, exists = true, sex = 2, modelID = 100,
         nativeCalls = {}, progress = {}, stops = 0, timers = {}, playerExists = true, playerSex = 2, questID = 1,
+        voices = { { voiceID = 0, name = "Voice zero" }, { voiceID = 7, name = "Narrator" } },
         texts = { detail = "Offer text.\n Objectives elsewhere.",
             progress = "Progress text!", reward = "Reward text?" }, resolveCalls = 0 }
     local environment = setmetatable({}, { __index = _G })
@@ -79,7 +80,7 @@ local function Harness(deferred, realTTS)
         return h.sex
     end
     function environment.UnitName(unit) return unit == "player" and "Test Player" or "Quest NPC" end
-    function environment.UnitRace() return "Human", "Human", 1 end
+    function environment.UnitRace() return "Human", h.playerRaceToken or "Human", 1 end
     function environment.GetQuestID() return h.questID end
     -- Keep the table-form mock separate from the editor's global API overloads.
     rawset(environment, "hooksecurefunc", function(owner, method, callback)
@@ -153,6 +154,7 @@ local function Harness(deferred, realTTS)
         environment.Enum = { TtsBoolSetting = { PlaySoundSeparatingChatLineBreaks = 0 } }
         environment.C_TTSSettings = { SetSetting = function(_setting, _value) end }
         environment.C_VoiceChat = {
+            GetTtsVoices = function() return h.voices end,
             SpeakText = function(voiceID, text, _rate, _volume, _overlap)
                 if h.failSpeech then error("Mock native submission failure") end
                 h.nativeCalls[#h.nativeCalls + 1] = { voiceID = voiceID,
@@ -164,7 +166,8 @@ local function Harness(deferred, realTTS)
         Load("Core/TTS.lua")
         speak = addon.TTS.Speak
     else
-        addon.TTS = { ReadingModes = { FULL = "full", SPLIT = "split" }, StartSession = function() end }
+        addon.TTS = { ReadingModes = { FULL = "full", SPLIT = "split" }, StartSession = function() end,
+            GetVoices = function() return h.voices end }
         speak = function() return true end
     end
     addon.Database:Initialize()
@@ -469,6 +472,107 @@ Test("Real TTS dispatcher honors reading modes and owns replacement", function()
     local count = #h.nativeCalls
     timer:Fire()
     Equal(#h.nativeCalls, count, "Replaced automatic request cannot interrupt another caller")
+end)
+
+Test("Single Voice covers manual, automatic, fallback, and Quest Log with independent speakers", function()
+    for _, mode in ipairs({ "full", "split" }) do
+        local h = Harness(false, true)
+        h.addon.Database:SetReadingMode(mode)
+        h.addon.Database:SetVoiceMode("single")
+        h.addon.Database:SetSingleVoice(7)
+        h.texts.detail = "Go to Andorhal / Chillwind Camp. Next_sentence!"
+        h.sex, h.playerSex, h.playerRaceToken = nil, nil, "UnmappedRace"
+        h.environment.QuestFrame:Show()
+        h:Panel("QuestFrameDetailPanel")
+
+        h:Click()
+        Equal(h.nativeCalls[1].voiceID, 7, "Known NPC uses the narrator")
+        Equal(h.heads[1].unit, "questnpc", "Known NPC retains its portrait and name")
+        h.modelID = 999
+        h:Click()
+        Equal(h.nativeCalls[2].voiceID, 7)
+        Equal(h.heads[2].unit, "questnpc", "Unmapped NPC with a valid model remains the speaker")
+        local session = h.addon.TTS.CurrentSession
+        Equal(session.voiceID, 7)
+        Equal(h.nativeCalls[2].text, mode == "full"
+            and "Go to Andorhal Chillwind Camp. Next sentence!"
+            or "Go to Andorhal Chillwind Camp.", "Both modes keep the sanitized speech path")
+
+        h.addon.Database:SetAutoNarrateQuests(true)
+        h.addon.Database:SetAutoNarrationDelay(3)
+        h.environment.QuestFrame:Fire("OnEvent", "QUEST_DETAIL")
+        Equal(#h.nativeCalls, 2, "Automatic narration still waits for its configured delay")
+        local timer = h.timers[#h.timers]
+        Equal(timer.delay, 3)
+        timer:Fire()
+        Equal(#h.nativeCalls, 3, "Automatic narration starts one session")
+        Equal(h.nativeCalls[3].voiceID, 7)
+        Equal(h.heads[3].unit, "questnpc", "Automatic narration also keeps an unmapped NPC")
+
+        h.modelID = 0
+        h:Click()
+        Equal(h.heads[4].unit, "player", "Unavailable NPC model uses player presentation")
+        Equal(h.nativeCalls[4].voiceID, 7, "Fallback keeps the narrator despite unknown player race/sex")
+        h.modelID = nil
+        h:Click()
+        Equal(h.heads[5].unit, "player", "Unready NPC model falls back")
+        h.exists = false
+        h:Click()
+        Equal(h.heads[6].unit, "player", "Missing NPC uses player presentation")
+        h.exists = true
+        h.integration.Model = nil
+        h:Click()
+        Equal(h.heads[7].unit, "player", "Missing inspection model uses player presentation")
+        local questLog = h:CreateQuestLogNarrator()
+        Equal(questLog:SpeakCurrentText(), true)
+        Equal(h.heads[8].unit, "player", "Quest Log remains player narration")
+        Equal(#h.nativeCalls, 8, "One initial request per narration session")
+        for _, call in ipairs(h.nativeCalls) do Equal(call.voiceID, 7, "Every source uses the same narrator") end
+        Equal(h.stops, 7, "Only new narration replaces playback")
+    end
+end)
+
+Test("Missing or unavailable Single Voice never falls back to family assignments", function()
+    for _, unavailable in ipairs({ false, 999 }) do
+        local h = Harness(false, true)
+        h.addon.Database:SetVoiceMode("single")
+        h.addon.Database:SetSingleVoice(unavailable or nil)
+        h.environment.QuestFrame:Show()
+        h:Panel("QuestFrameDetailPanel")
+        h:Click()
+        h.exists = false
+        h:Click()
+        h:CreateQuestLogNarrator():SpeakCurrentText()
+        Equal(#h.nativeCalls, 0, "Do not use configured NPC/player family voices")
+        Equal(#h.heads, 0, "Missing voice leaves presentation alone")
+        Equal(h.addon.TTS.CurrentSession, nil)
+        Equal(h.addon.Database:GetVoiceMode(), "single", "Do not silently change assignment mode")
+        Equal(h.addon.Database:GetSingleVoice(), unavailable or nil, "Do not discard an unavailable selection")
+        assert(#h.diagnostics > 0, "Missing voices use existing error reporting")
+    end
+end)
+
+Test("Changing voice settings preserves active playback and introduces no sessions or delays", function()
+    for _, mode in ipairs({ "full", "split" }) do
+        local h = Harness(false, true)
+        h.addon.Database:SetVoiceMode("single")
+        h.addon.Database:SetSingleVoice(7)
+        h.addon.Database:SetReadingMode(mode)
+        h.environment.QuestFrame:Show()
+        h:Panel("QuestFrameDetailPanel")
+        h:Click()
+        local session = h.addon.TTS.CurrentSession
+        h.addon.Database:SetVoiceMode("raceGender")
+        h.addon.Database:SetSingleVoice(0)
+        h.addon.Database:SetVoiceMode("single")
+        Equal(h.addon.TTS.CurrentSession, session)
+        Equal(session.voiceID, 7, "Active session retains its resolved voice")
+        Equal(h.addon.TTS.SessionID, 1)
+        Equal(#h.nativeCalls, 1)
+        Equal(h.stops, 0)
+        Equal(#h.timers, 0)
+        Equal(h.addon.UI.TalkingHead.shown, true)
+    end
 end)
 
 Test("QuestFrame and Quest Log sanitize speech while keeping original Talking Head text", function()

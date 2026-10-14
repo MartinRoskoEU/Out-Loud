@@ -75,3 +75,9 @@ function VoiceRow:Setup(
         setFemaleVoice
     )
 end
+
+function VoiceRow:SetEnabled(enabled)
+    self.MaleComboBox:SetEnabled(enabled)
+    self.FemaleComboBox:SetEnabled(enabled)
+    self.RaceLabel:SetFontObject(enabled and GameFontHighlight or GameFontDisable)
+end

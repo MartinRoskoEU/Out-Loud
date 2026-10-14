@@ -3,6 +3,11 @@ local AddonName, OutLoud = ...
 local VoiceSelection = {}
 OutLoud.VoiceSelection = VoiceSelection
 
+VoiceSelection.AssignmentModes = {
+    SINGLE = "single",
+    RACE_GENDER = "raceGender",
+}
+
 -- Runtime UnitSex values, independent of generated model data.
 VoiceSelection.Genders = {
     MALE = 2,
@@ -45,6 +50,29 @@ local function ResolveConfiguredVoice(info)
     return info.voiceID, info
 end
 
+function VoiceSelection:IsSingleVoiceMode()
+    return OutLoud.Database:GetVoiceMode() == self.AssignmentModes.SINGLE
+end
+
+local function ResolveSingleVoice(info)
+    local voiceID = OutLoud.Database:GetSingleVoice()
+    if voiceID == nil then
+        info.reason = "single-voice-not-set"
+        return nil, info
+    end
+
+    if type(voiceID) == "number" and voiceID >= 0 and voiceID % 1 == 0 then
+        for _, voice in ipairs(OutLoud.TTS:GetVoices()) do
+            if voice.voiceID == voiceID then
+                info.voiceID = voiceID
+                return voiceID, info
+            end
+        end
+    end
+    info.reason = "single-voice-unavailable"
+    return nil, info
+end
+
 function VoiceSelection:ResolvePlayer()
     local info = {}
     if not UnitExists("player") then
@@ -53,6 +81,9 @@ function VoiceSelection:ResolvePlayer()
     end
 
     info.name = UnitName("player")
+    if self:IsSingleVoiceMode() then
+        return ResolveSingleVoice(info)
+    end
     info.raceName, info.raceToken, info.raceID = UnitRace("player")
     info.sex = UnitSex("player")
     info.gender = GetGender(info.sex)
@@ -107,14 +138,23 @@ function VoiceSelection:Resolve(unit, model)
     end
 
     info.name = UnitName(unit)
-    info.sex = UnitSex(unit)
-    info.gender = GetGender(info.sex)
+    local singleVoice = self:IsSingleVoiceMode()
+    if not singleVoice then
+        info.sex = UnitSex(unit)
+        info.gender = GetGender(info.sex)
+    end
 
     info.modelFileID = model and model:GetModelFileID()
 
     if not info.modelFileID or info.modelFileID == 0 then
         info.reason = "model-unavailable"
         return nil, info
+    end
+
+    -- Model readiness still determines NPC presentation; family/gender do not
+    -- determine the voice in Single Voice mode.
+    if singleVoice then
+        return ResolveSingleVoice(info)
     end
 
     info.family = self:GetFamily(info.modelFileID)

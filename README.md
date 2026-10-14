@@ -5,8 +5,8 @@ text aloud with configurable voices.
 
 ## Overview
 
-Out Loud chooses an NPC's configured voice from its visual model family and
-runtime gender. A Blizzard-style Talking Head shows the speaker and dialogue
+Out Loud can use one narrator voice for all speech or choose a configured voice
+from the speaker's family and runtime gender. A Blizzard-style Talking Head shows the speaker and dialogue
 while speech is generated and played.
 
 Manual Out Loud buttons connect current quest dialogue to the NPC's voice, or
@@ -17,7 +17,8 @@ and the loading spinner clears when owned playback begins.
 
 ## Current Features
 
-- Options UI with saved Male and Female voice assignments for each Voice Family.
+- Options UI with Single Voice and Race & Gender assignment modes, plus saved
+  Male and Female voice assignments for each Voice Family.
 - Generated mappings from NPC model FileDataIDs to Voice Families.
 - A runtime voice resolver that combines the model family with `UnitSex(unit)`
   and returns the configured voice.
@@ -30,8 +31,8 @@ and the loading spinner clears when owned playback begins.
 - Optional automatic narration for quest offer, progress, and reward pages,
   disabled by default. Manual buttons remain available.
 - A manual **Out Loud** button for quest offer, progress, and reward dialogue.
-  It uses the current NPC's portrait and voice, falling back to the player when
-  the NPC's voice cannot be resolved, and reads the current dialogue.
+  It uses the current NPC's portrait and selected voice, falling back to the player
+  when the NPC cannot be used, and reads the current dialogue.
   Talking Head closes when narration finishes or stops.
   The button hides on quest greeting/list screens and when the quest window closes.
 - A manual **Out Loud** button opposite **Back** in selected Quest Log details.
@@ -40,14 +41,20 @@ and the loading spinner clears when owned playback begins.
 
 ## How Voice Selection Works
 
-The resolver reads two independent properties of the NPC:
+**Single Voice** uses the selected Narrator Voice for NPC, player, automatic,
+and Quest Log narration. NPCs with usable models keep their portrait and name,
+including NPCs without a mapped family. Missing NPCs or models use the player as
+speaker. An unset or unavailable narrator voice stops narration with an error.
+
+**Race & Gender** is the default and preserves the existing resolution and
+player fallback. The resolver reads two independent properties of the NPC:
 
 ```text
 NPC visual model -> Model FileDataID -> Voice Family
 NPC UnitSex      -> Male / Female
 ```
 
-It combines the family and gender to choose the player's configured voice.
+It combines the family and gender to choose the configured voice for that family.
 Gender comes from the live NPC, rather than the model mapping.
 
 If QuestFrame cannot resolve a usable NPC voice, the player reads the same quest
@@ -63,9 +70,14 @@ For example, the two Skyborne model IDs in the Forever mapping both use
 
 ## Voice Configuration
 
-The Out Loud Options page provides one row with separate Male and Female voice
-selectors for every available Voice Family. Selectors list the TTS voices
-available to the game and include a **Not set** option.
+The **Voice Assignment** radio group selects **Single Voice** or **Race & Gender**.
+The Narrator Voice selector and the existing family rows remain visible. Only the
+active mode's selectors can be used; the other controls appear disabled.
+Switching modes preserves both sets of assignments and leaves current playback running.
+
+Each family row provides separate Male and Female selectors. All selectors list
+the same TTS voices available to the game and include a **Not set** option.
+Unavailable selections are indicated without erasing the stored setting.
 
 Available families come from generated mapping data. Each unique family appears
 once, regardless of how many models use it. Assignments are saved between sessions.
@@ -100,14 +112,17 @@ QuestFrame narration are implemented.
 The dialogue text APIs and NPC voice resolver have been verified in-game by the
 user. The combined button, Talking Head, and speech flow still requires
 verification in WoW: Forever.
+The voice assignment modes and disabled controls have standalone/mock coverage;
+their native UI behavior and combined narration flow still require in-game verification.
 
 ## Architecture
 
 The addon separates voice resolution, speech, and presentation:
 
 - Generated Voice Family mappings connect NPC visual models to configurable families.
-- `VoiceSelection` resolves an NPC model or player race to a family, then uses
-  `UnitSex` gender detection to select a configured voice.
+- `VoiceSelection` selects the configured narrator in Single Voice mode, or
+  resolves an NPC model or player race to a family and uses `UnitSex` gender
+  detection in Race & Gender mode.
 - The TTS controller speaks supplied text with a supplied voice and applies the
   selected speech mode.
 - Talking Head provides the speaker portrait, dialogue display, and loading state.

@@ -14,7 +14,7 @@ end
 
 local function Frame(parent)
     local frame = { scripts = {}, points = {}, callbacks = {}, parent = parent, shown = true,
-        heightValue = 0, widthValue = 800, scrollValue = 0 }
+        heightValue = 0, widthValue = 800, scrollValue = 0, enabled = true }
     local methods = {
         SetScript = function(self, event, callback) self.scripts[event] = callback end,
         HookScript = function(self, event, callback)
@@ -29,6 +29,15 @@ local function Frame(parent)
         end,
         GetScript = function(self, event) return self.scripts[event] end,
         SetText = function(self, text) self.textValue = text end,
+        SetFontObject = function(self, font) self.fontObject = font end,
+        SetChecked = function(self, checked) self.checked = checked end,
+        SetEnabled = function(self, enabled) self.enabled = enabled end,
+        IsEnabled = function(self) return self.enabled end,
+        SetSelectionText = function(self, callback) self.selectionText = callback end,
+        GenerateMenu = function(self)
+            if self.selectionText then self.textValue = self.selectionText() end
+        end,
+        CloseMenu = function(self) self.menuOpen = false end,
         GetStringWidth = function(self) return #(self.textValue or "") * 8 end,
         SetWidth = function(self, width) self.widthValue = width end,
         GetWidth = function(self) return self.widthValue end,
@@ -77,7 +86,7 @@ local function Frame(parent)
     }
     setmetatable(frame, { __index = function(self, key)
         if key == "Title" or key == "Label" or key == "Dropdown" or key == "text"
-            or key == "HoverBackground" then
+            or key == "HoverBackground" or key == "IncrementButton" or key == "DecrementButton" then
             local child = Frame(self)
             rawset(self, key, child)
             return child
@@ -122,6 +131,13 @@ function environment.CreateFrame(kind, _name, parent, template)
         function frame:ScrollStepInDirection(direction)
             self:SetScrollPercentage(self.percentage + direction * self.pan)
         end
+    elseif template == "SettingsDropdownWithButtonsTemplate" then
+        -- Mirror the exported mixin's propagation to dropdown and steppers.
+        function frame:SetEnabled(enabled)
+            self.Dropdown:SetEnabled(enabled)
+            self.DecrementButton:SetEnabled(enabled)
+            self.IncrementButton:SetEnabled(enabled)
+        end
     end
     if kind == "ScrollFrame" then
         frame:SetSize(760, 420)
@@ -140,6 +156,10 @@ environment.Settings = {
 }
 environment.SettingsCheckboxMixin = { Event = { OnValueChanged = "OnValueChanged" } }
 environment.ScrollBoxConstants = { NoScrollInterpolation = true }
+for _, font in ipairs({ "GameFontNormal", "GameFontHighlight", "GameFontHighlightSmall",
+    "GameFontDisable", "GameFontDisableSmall" }) do
+    environment[font] = font
+end
 environment.C_VoiceChat = { GetTtsVoices = function()
     local voices = {}
     for id = 0, 60 do
@@ -210,6 +230,12 @@ Equal(settingsPage.ScrollFrame:GetVerticalScroll(), 0, "Initial scroll at top")
 Equal(addon.Database:GetVoice("UNDEAD", 2), 50, "Keep saved male assignment")
 Equal(addon.Database:GetVoice("UNDEAD", 3), 41, "Keep saved female assignment")
 Equal(addon.Database:GetReadingMode(), "split", "Keep reading settings")
+Equal(addon.Database:GetVoiceMode(), "raceGender", "Existing users default to Race & Gender")
+Equal(addon.Database:GetSingleVoice(), nil, "No arbitrary narrator voice is chosen")
+Equal(settingsPage.RaceGenderButton.checked, true, "Default radio selection is clear")
+Equal(settingsPage.SingleVoiceButton.checked, false)
+Equal(settingsPage.SingleVoiceComboBox.Dropdown:IsEnabled(), false, "Inactive Single Voice is disabled")
+Equal(settingsPage.VoiceRows[1].MaleComboBox.Dropdown:IsEnabled(), true)
 Equal(initFrame.scripts.OnEvent, nil, "Release initialization callback after loading")
 Equal(addon.Database:GetAutoNarrationDelay(), 2, "Automatic delay default")
 Equal(settingsPage.AutoNarrationDelaySlider.enabled, false, "Delay control disabled by default")
@@ -328,6 +354,106 @@ addon.Database.Initialized = false
 addon.Database:Initialize()
 Equal(addon.Database:GetVoice("UNDEAD", 3), nil, "Cleared voice remains unset after reinitialization")
 Unresolved(959310, 3, "voice-not-set")
+
+-- Both assignment areas use the exact same available options and native controls.
+local function MenuEntries(combo)
+    local entries = {}
+    combo.Dropdown.menu(nil, { CreateRadio = function(_, label, get, set, value)
+        entries[#entries + 1] = { label = label, value = value, get = get, set = set }
+    end })
+    return entries
+end
+local narrator = settingsPage.SingleVoiceComboBox
+local narratorEntries = MenuEntries(narrator)
+local familyEntries = MenuEntries(settingsPage.VoiceRows[1].MaleComboBox)
+Equal(#narratorEntries, #familyEntries, "Same voice count, including Not set")
+for index, entry in ipairs(narratorEntries) do
+    Equal(entry.label, familyEntries[index].label)
+    Equal(entry.value, familyEntries[index].value, "No separate voice filtering")
+end
+narratorEntries[22].set(20)
+Equal(addon.Database:GetSingleVoice(), nil, "Disabled narrator ignores stale menu actions")
+local voices = savedVariables.voices
+local skyborneMale, skyborneFemale = voices.SKYBORNE[2], voices.SKYBORNE[3]
+settingsPage.SingleVoiceButton.scripts.OnClick()
+Equal(addon.Database:GetVoiceMode(), "single")
+Equal(settingsPage.SingleVoiceButton.checked, true)
+Equal(settingsPage.RaceGenderButton.checked, false)
+Equal(narrator.Dropdown:IsEnabled(), true)
+Equal(settingsPage.NarratorVoiceLabel.fontObject, "GameFontNormal")
+for _, row in ipairs(settingsPage.VoiceRows) do
+    for _, combo in ipairs({ row.MaleComboBox, row.FemaleComboBox }) do
+        Equal(combo.Dropdown:IsEnabled(), false, "Inactive family dropdown is disabled")
+        Equal(combo.Frame.IncrementButton:IsEnabled(), false, "Inactive increment is disabled")
+        Equal(combo.Frame.DecrementButton:IsEnabled(), false, "Inactive decrement is disabled")
+    end
+    Equal(row.RaceLabel.fontObject, "GameFontDisable", "Inactive family label is dimmed")
+end
+familyEntries[22].set(20)
+Equal(addon.Database:GetVoice("FUTURE_FAMILY", 2), nil, "Inactive family callbacks cannot write settings")
+narratorEntries[22].set(20)
+Equal(addon.Database:GetSingleVoice(), 20, "Enabled narrator selector saves the same numeric ID convention")
+Equal(narratorEntries[22].get(20), true)
+
+-- Single mode has no dependency on model mappings, race tokens, or runtime sex.
+modelID = 999999
+local originalUnitSex = environment.UnitSex
+environment.UnitSex = function() error("Single Voice must not require gender") end
+environment.UnitRace = function() error("Single Voice must not require player race") end
+local singleVoice, singleInfo = selection:Resolve("questnpc", model)
+Equal(singleVoice, 20, "Unknown NPC family uses the narrator voice")
+Equal(singleInfo.modelFileID, 999999, "Retain model information for speaker presentation")
+Equal(singleInfo.family, nil)
+Equal(selection:ResolvePlayer(), 20, "Player narration uses the same voice")
+environment.UnitSex = originalUnitSex
+addon.Database:SetSingleVoice(0)
+Equal(selection:ResolvePlayer(), 0, "Voice ID zero remains valid")
+addon.Database:SetSingleVoice(nil)
+singleVoice, singleInfo = selection:ResolvePlayer()
+Equal(singleVoice, nil)
+Equal(singleInfo.reason, "single-voice-not-set")
+narrator:Refresh()
+Equal(narrator.Dropdown.textValue, "Not set")
+for _, unavailable in ipairs({ 999, -1, 1.5, "invalid" }) do
+    addon.Database:SetSingleVoice(unavailable)
+    singleVoice, singleInfo = selection:ResolvePlayer()
+    Equal(singleVoice, nil, "Unavailable narrator never falls back to family voices")
+    Equal(singleInfo.reason, "single-voice-unavailable")
+    settingsPage:RefreshVoiceAssignment()
+    Equal(addon.Database:GetSingleVoice(), unavailable, "Unavailable narrator setting is preserved")
+    Equal(narrator.Dropdown.textValue, "Unavailable (voice " .. unavailable .. ")")
+end
+addon.Database:SetSingleVoice(20)
+settingsPage.RaceGenderButton.scripts.OnClick()
+Equal(narrator.Dropdown:IsEnabled(), false)
+Equal(settingsPage.NarratorVoiceLabel.fontObject, "GameFontDisable")
+Equal(savedVariables.voices, voices, "Mode switching retains the family table")
+Equal(voices.SKYBORNE[2], skyborneMale)
+Equal(voices.SKYBORNE[3], skyborneFemale)
+Equal(addon.Database:GetSingleVoice(), 20, "Inactive narrator selection is retained")
+Resolve(959310, 2, "UNDEAD", "MALE", 50)
+addon.Database:SetVoiceMode("single")
+settingsPage.ScrollFrame:Show()
+Equal(settingsPage.SingleVoiceButton.checked, true, "Opening Settings refreshes saved mode")
+Equal(narrator.Dropdown:IsEnabled(), true)
+Equal(settingsPage.VoiceRows[1].MaleComboBox.Dropdown:IsEnabled(), false)
+addon.Database:SetVoice("HUMAN", 2, 999)
+settingsPage:CreateVoiceRows(settingsPage.VoicesColumns)
+Equal(addon.Database:GetVoice("HUMAN", 2), 999, "Rebuilding Settings preserves unavailable family assignments")
+addon.Database:SetVoice("HUMAN", 2, 0)
+
+-- A freshly loaded database reads both independent settings from SavedVariables.
+local reloaded = { VoiceSelection = selection, TTS = addon.TTS }
+local reloadDatabase = assert(LoadFile("Core/Database.lua"))
+setfenv(reloadDatabase, environment)
+reloadDatabase("OutLoud", reloaded)
+reloaded.Database:Initialize()
+Equal(reloaded.Database:GetVoiceMode(), "single", "Assignment mode persists after reload")
+Equal(reloaded.Database:GetSingleVoice(), 20, "Narrator voice persists after reload")
+Equal(reloaded.Database:GetVoice("SKYBORNE", 2), skyborneMale, "Family assignments persist after reload")
+addon.Database:SetVoiceMode("invalid")
+Equal(addon.Database:GetVoiceMode(), "raceGender", "Invalid modes normalize to the existing behavior")
+settingsPage:RefreshVoiceAssignment()
 
 -- Empty exports still anchor the Reading section safely.
 addon.VoiceMappings.Families = {}

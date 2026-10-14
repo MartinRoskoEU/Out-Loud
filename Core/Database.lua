@@ -24,6 +24,11 @@ local function NormalizeReadingMode(mode)
     return mode == modes.SPLIT and modes.SPLIT or modes.FULL
 end
 
+local function NormalizeVoiceMode(mode)
+    local modes = OutLoud.VoiceSelection.AssignmentModes
+    return mode == modes.SINGLE and modes.SINGLE or modes.RACE_GENDER
+end
+
 function Database:Initialize()
     if self.Initialized then
         return
@@ -44,6 +49,7 @@ function Database:Initialize()
         db.autoNarrateQuests = false
     end
     db.readingMode = NormalizeReadingMode(db.readingMode)
+    db.voiceMode = NormalizeVoiceMode(db.voiceMode)
     db.autoNarrationDelay = NormalizeAutoNarrationDelay(db.autoNarrationDelay)
 
     self.DB = db
@@ -70,6 +76,22 @@ function Database:SetVoice(family, gender, voiceID)
     end
 
     voices[family][gender] = voiceID
+end
+
+function Database:GetVoiceMode()
+    return NormalizeVoiceMode(self.DB.voiceMode)
+end
+
+function Database:SetVoiceMode(mode)
+    self.DB.voiceMode = NormalizeVoiceMode(mode)
+end
+
+function Database:GetSingleVoice()
+    return self.DB.singleVoice
+end
+
+function Database:SetSingleVoice(voiceID)
+    self.DB.singleVoice = voiceID
 end
 
 function Database:GetReadingMode()

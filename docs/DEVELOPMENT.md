@@ -20,21 +20,48 @@ until the required Blizzard UI globals exist.
 - `OutLoudDB.voices[family][sex]` stores voice assignments. Families are stable
   string identities, rather than numeric DB2 RaceIDs. Runtime `UnitSex` values
   are `2` for Male and `3` for Female.
+- `OutLoudDB.voiceMode` is `"single"` or `"raceGender"`; missing/invalid values
+  default to `"raceGender"`. `OutLoudDB.singleVoice` stores the optional narrator
+  voice ID using the same numeric ID convention as existing family assignments.
+  The schema adds no migration and does not rewrite the family assignment table.
+  Switching modes preserves both settings and never calls TTS start/stop.
 - `Data/VoiceMappings.lua` contains `VoiceMappings.Families` and direct
   `VoiceMappings.Models[FileDataID]` family mappings. It can be replaced with
   generator output and contains no gender data or addon runtime helpers.
 - Options derives its rows from unique `VoiceMappings.Families` values, including
   families without model entries. Display labels convert keys such as `NIGHT_ELF`
   into readable names such as "Night Elf".
-- `OutLoud.VoiceSelection:Resolve(unit, model)` accepts a PlayerModel already
+- In Race & Gender mode, `OutLoud.VoiceSelection:Resolve(unit, model)` accepts a PlayerModel already
   loaded for that unit and returns the configured voice ID plus inspection
   details. Unknown models, unavailable models/units, unknown sex, and unset voices
   return no voice, with a reason in the details. The resolver does not start speech.
-- `OutLoud.VoiceSelection:ResolvePlayer()` uses the locale-stable token from
+- In Race & Gender mode, `OutLoud.VoiceSelection:ResolvePlayer()` uses the locale-stable token from
   `UnitRace("player")`, checks its explicit mapping against `VoiceMappings.Families`,
   and combines that family with `UnitSex("player")` and the existing database.
   It requires no inspection model. Unknown race tokens, unknown sex, and unset
   voices return no voice, with a reason; there is no fallback for custom races.
+
+Both resolvers select the assignment mode inside `VoiceSelection`. Single Voice
+uses `Database:GetSingleVoice()` and checks it against the existing
+`TTS:GetVoices()` enumeration. It requires no family/race/gender lookup and
+returns `single-voice-not-set` or `single-voice-unavailable` for an unusable
+selection, without choosing a fallback voice or clearing the saved value.
+Unit availability and NPC model readiness still apply to speaker presentation:
+an unmapped NPC with a usable model stays the speaker, while missing/unready
+NPCs use the existing player presentation fallback with the same narrator voice.
+
+The Voice Assignment radio group uses the existing `UIRadioButtonTemplate`.
+Both configuration areas stay visible. `ComboBox:SetEnabled()` delegates to
+the native `SettingsDropdownWithButtonsTemplate` mixin, disabling the dropdown
+and both steppers; disabled callbacks are also guarded and open menus close.
+Labels use native disabled fonts. Mode clicks and Settings reopening refresh
+checked/enabled states and selected text. All selectors share `GetVoiceOptions()`.
+Unavailable choices display `Unavailable (voice ID)` and Settings no longer
+deletes unavailable family assignments when rebuilding rows.
+The native `SetEnabled`, `SetSelectionText`, `GenerateMenu`, and `CloseMenu`
+behavior was inspected in the local Forever export's setting controls, shared
+panel templates, and menu code. Mock checks do not verify their in-game styling
+or interaction; those still require a manual check.
 
 NPC and player resolution share gender naming and configured-voice lookup;
 their model/race lookups and failure reasons remain distinct. Missing or malformed
@@ -218,7 +245,9 @@ calls `SetUnit("questnpc")`, then calls
 ID, including `0`, keeps the NPC as speaker. Missing NPC/model, unresolved model
 or family, unsupported gender, and missing or invalid configured voice instead
 fall back once to the existing `VoiceSelection:ResolvePlayer()` used by Quest Log.
-The chosen speaker and unchanged dialogue enter the same presentation lifecycle:
+Those family/gender failure rules apply in Race & Gender mode. Single Voice
+keeps a usable NPC model regardless of its family/gender and uses the narrator
+for player fallback as well. The chosen speaker and unchanged dialogue enter the same presentation lifecycle:
 
 ```lua
 local ok, reason = OutLoud.Narration:Speak(speakerUnit, text, voiceID)
@@ -503,7 +532,7 @@ still closes Talking Head when narration ends. Loading and TTS cancellation are
 unchanged. Scrollbar placement/dragging, scrolling speed, text clipping, sentence
 transitions, and cancellation/reuse need visual in-game verification.
 
-Missing text produces no new Talking Head presentation or speech. NPC resolution
+Missing text produces no new Talking Head presentation or speech. In Race & Gender mode, NPC resolution
 failure uses the player's configured voice and `"player"` Talking Head model/name;
 there is no generic default voice. If player resolution also fails, a red error
 is shown and no new narration starts. The inspection model is cleared before
@@ -512,6 +541,15 @@ load returning `model-unavailable` immediately takes the player fallback;
 there is no model-loading retry timer or fallback loop. Normal NPC narration,
 item/no-NPC quests, both reading modes, and failed player resolution require
 in-game verification.
+
+For voice assignment verification in-game, open Options and switch between
+Single Voice and Race & Gender. Confirm the selected radio, disabled dropdowns
+and steppers, retained selections, and scroll layout after reopening and `/reload`.
+In Single Voice, try a mapped NPC, an unmapped NPC with a usable model, an item
+quest without an NPC, and Quest Log narration. Check portrait/name independently
+of voice in both full and split modes, including automatic narration with its
+configured delay. Clear Narrator Voice and confirm a graceful error without
+speech. Changing mode during playback should leave that session running.
 
 ### Narration diagnostics
 
