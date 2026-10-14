@@ -182,38 +182,123 @@ disables Blizzard's line-separator sound once.
 
 Both modes share cancellation and monotonically increasing session IDs. Starting
 valid new speech cancels the active session before submitting immediately.
-Completed/cancelled session tables are discarded, including their pending terminal
-event buffers. `Stop()` explicitly records cancellation in `TTS.CancelledSession`:
-only the most recent cancellation is retained, with at most 128 submitted,
-unfinished tokens whose ownership bookmarks have not already been identified.
-The summary retains no speech text, session callbacks or terminal-event buffers.
-Normal completion records no cancellation, so completed-session bookmarks cannot
-authorize another native stop. Session-ID age alone is never used as cancellation evidence.
+Sessions record `state` (`active`, `completed`, `failed`, `cancelled`), creation/end
+times, stop reason, and replacement ID. A request identity is reserved before
+replacement callbacks run, so narration requested by a callback cannot be
+overwritten by the enclosing request. A superseded Speak call returns
+`false, "session-replaced"`. The public speech methods and presentation callback
+signatures are unchanged. Full still uses one request and its `WHOLE` bookmark.
 
-Matching current-session bookmarks keep their existing ownership/progression rules.
-Stale bookmarks never call `Stop()` or affect an active newer narration. If a stale
-token matches the cancellation summary, it is consumed even while a new session
-is active, so a duplicate delivered later while idle cannot trigger stopping.
-While idle, the first eligible cancelled-session bookmark consumes the entire
-summary and requests one `StopPlayback()` call for delayed native playback.
-Repeated, already identified, unsubmitted, wrong-mode, completed-session and
-forgotten-session bookmarks are ignored. Cancelled sessions are never reactivated
-and cannot submit another sentence. There are no retries, timers or repeated stops.
+Split's authoritative records live in `CurrentSession.sentenceStates[index]`:
+
+- `state`: `planned`, `skipped`, `submitted`, `playback-confirmed`, `completed`,
+  `failed`, `cancelled`, or `closed-unresolved`.
+- Session ID, original sentence index, submission state, ownership bookmark,
+  primary native utterance ID, playback confirmation, and logical cancellation.
+- `attempts`: submission attempts identified by session ID, sentence index, and
+  attempt ordinal. Currently only attempt 1 is submitted; there is no retry path.
+  Future retries would also need distinct wire bookmarks before being enabled.
+
+An attempt records `submissionState` (`calling`, `returned`, `error`), submission
+time, submitted voice/rate, ownership and native-event evidence, and global-stop
+exposure (count, last stop ID/time/result). A returned call is not proof of queue
+acceptance. `nativeState` is `waiting-unconfirmed`, `bookmark-observed`,
+`finished-reported`, `failed-reported`, or `unknown-after-stop`. Terminal evidence
+and logical cancellation are independent: a cancelled sentence can later produce
+owned playback or terminal events without reactivating narration. A terminal
+emitted during stop is marked `duringStop`; it does not prove all text was spoken.
+Failed unfinished requests also lose playback authorization while retaining their
+`failed` logical outcome; a submission exception does not prove native removal.
+
+The first ownership bookmark authorizes the existing one-sentence-ahead prefetch.
+Repeated bookmarks and secondary native utterances never authorize additional
+progression. At most two native utterance observations are retained per attempt;
+further IDs set `evidenceOverflow` and leave its native disposition unresolved.
+Conflicting ownership of a reused utterance ID is treated as ambiguous. Events
+with ambiguous ownership cannot complete/fail narration. Additional native IDs
+are duplicate candidates, not proof that audible speech happened twice.
+
+Final-chunk finish retains the existing session-end behavior. Earlier chunks with
+no confirmed terminal become `closed-unresolved`, not implicitly completed.
+That logical label records their disposition at session end; later native evidence
+can resolve an attempt without reopening the retired session.
+Empty sanitized sentences remain indexed as `skipped` and never get attempts.
+Split's `queued`, `completedTokens`, and `completedUtterances` are compatibility
+views; controller decisions use sentence/attempt records.
+
+Ended Split sessions release display/speech text, callbacks, bindings, and pending
+event buffers. `TTS.SplitHistory` keeps compact metadata for at most eight sessions
+and 128 submitted attempts, without text, callbacks or completed session objects.
+Metadata eviction is loss of correlation evidence, never proof of native removal.
+Historical known utterances can still receive observations. Unowned event buffers
+are reset between controller epochs; they never carry a cached terminal into a
+new session. Full retains its existing ephemeral session and cancellation summary.
+
+`Stop()` retains the existing `TTS.CancelledSession` stop-authorization summary:
+only the latest cancellation, with at most 128 submitted unfinished tokens that
+were not identified at cancellation, preferring the most recent submissions.
+This is independent of historical observation
+metadata. `GetSplitRecoveryEligibility(attempt)` exposes `idleStopEligible`,
+`emergencyStopEligible`, `retryEligible`, and the decision reason. Active newer
+narration can receive the experimental recovery below. Native uncertainty alone
+never authorizes resubmission, and retries remain disabled.
+
+Emergency STOP is considered only on a fresh, exact ownership bookmark of a
+retained, previously submitted Split attempt from a logically cancelled session.
+The attempt must have returned from submission and an earlier addon stop call,
+have no ownership at cancellation, and have no terminal, ambiguous or excess
+native-utterance evidence. The newer session must be active in Split mode, with
+no ownership evidence at all and no previous emergency recovery attempt. Full
+sources and active Full sessions keep their existing playback policy.
+
+STARTED alone is not ownership. Its native ID is correlated when a matching
+bookmark arrives. Another unidentified STARTED, BOOKMARK, FINISHED or FAILED
+blocks recovery; lack of events does not prove exclusive native audio ownership.
+Up to 128 unidentified IDs are retained as metadata, including through logical
+replacement/stop. Ownership correlation clears a matching ID, but a successful
+global stop does not clear unidentified evidence. Evidence loss or ambiguous
+ownership blocks recovery conservatively; unresolved evidence may keep it blocked.
+
+An eligible stale bookmark requests exactly one additional native
+`StopSpeakingText()` for that newer session. Its budget is consumed before native
+code executes, even if the call raises an error. This never calls logical `Stop()`
+on the newer session and never resubmits its pending sentence. Existing records,
+callbacks and normal ownership-driven prefetching remain in place. Both old and
+new unresolved attempts record exposure to that global stop. Performed/skipped
+decisions and reasons are recorded by the optional diagnostic observer.
+
+The existing single idle follow-up stop is preserved for an eligible, newly owned
+cancelled request with unresolved native disposition. Its stop-authorization token
+is consumed even during active replacement narration, preventing a later repeat
+from stopping audio while idle. Already identified, completed, unsubmitted,
+wrong-mode and forgotten tokens cannot authorize that follow-up. Older retained
+cancellations can also supply evidence for the guarded emergency recovery.
+No automatic retry, timeout, timer, or artificial delay is introduced.
 
 Only owned utterances can finish or fail a session. Native call errors are caught
 and printed in red regardless of the diagnostic flag. Bookmarks establish ownership. An
 asynchronous failure before the first ownership bookmark cannot immediately be
 distinguished from unrelated TTS and does not change session state.
-Each session retains up to 128 recent terminal-event records by utterance ID,
+Each controller epoch retains up to 128 recent terminal-event records by utterance ID,
 discarding the oldest records when full. An exact current-session ownership
 bookmark is required before a retained failure or finish can be applied.
 Duplicate events within the current session do not duplicate cleanup. A late finish is applied without
 restarting playback notifications, scrolling, or text transitions. In split mode,
 a recovered intermediate finish submits only the next sentence; completed chunk
 and utterance guards prevent repeated progression or resurrection.
+Split also retains at most 128 unowned STARTED records, which can be associated
+after an exact issued bookmark arrives. STARTED alone cannot establish ownership.
+During an ordinary native stop, Split evidence is recorded passively. During an
+emergency stop, up to 128 synchronous playback events are deferred, then dispatched
+after the native call returns so valid newer ownership/terminals are not consumed
+without their normal Lua state transitions, callbacks and prefetching. Deferred
+events do not advance narration inside the stop call. Overflow is reported as
+evidence loss, never treated as native silence or retry permission. Unowned
+evidence from an ended controller epoch cannot claim a subsequent replacement.
 Unowned records are evidence to correlate later, never ownership by themselves.
-They do not survive session replacement; a discarded/evicted record cannot be
-recovered without another terminal event.
+STARTED/terminal buffers do not survive session replacement; only unidentified-ID
+metadata is carried for conservative recovery eligibility. A discarded/evicted
+terminal cannot be recovered without another terminal event.
 
 The local `VoiceChatDocumentation.lua` documents no return value for `SpeakText`.
 `STARTED`, `FAILED`, `FINISHED`, and `VOICE_CHAT_TTS_SPEAK_TEXT_UPDATE` carry an
@@ -233,14 +318,21 @@ is exposed. Arbitrary external purges therefore remain undetectable; Lua cleanup
 cannot guarantee native silence after a failed global stop. The idle follow-up is
 still global and can interrupt unrelated TTS; the API cannot establish exclusive
 audio ownership or selectively cancel an old utterance. If old audio survives
-cancellation while newer narration is active, its stale bookmark is ignored to
-protect the new narration, and old audio may remain audible. Older cancellations
-are forgotten when another session is cancelled. Tokens beyond the summary limit,
-or delayed output after the one idle follow-up, receive no further stop requests.
+cancellation while newer narration is active, a guarded experimental global stop
+may interrupt it. That stop can also purge newer or unrelated requests; Lua has no
+selective cancellation or queue inspection. A purged newer request may never emit
+a terminal and remains unresolved without resubmission. Received FINISHED events
+report a native terminal, not proof that the full sentence was audibly spoken.
+In Split, stale evidence and performed/skipped recovery decisions are recorded.
+Only the newest cancellation
+can authorize the idle follow-up. Tokens beyond retention limits, or delayed output
+after that follow-up, receive no further stop requests.
 These limits preserve bounded state and avoid speculative synchronization.
 Early-event buffering, current-session ownership, completed-token guards,
 sanitization/escaping, Speech Rate and one-sentence-ahead prefetch remain unchanged.
-Standalone/mock checks cover idle cancellation, active replacements in TTS and
+Standalone/mock checks cover explicit sentence/attempt states, stop exposure,
+recovery eligibility predicates, deferred-event dispatch, ambiguous IDs, bounded
+duplicate evidence, rapid switches, callback reentrancy, recorder removal, idle cancellation, active replacements in TTS and
 Quest/Gossip integrations, normal completion, repeated bookmarks, submitted-token
 validation, summary eviction/bounds and unchanged progression. The user verified
 the earlier idle-stop protection in-game, and independently reported successful
@@ -250,6 +342,59 @@ Talking Head close with a prefetched sentence, rapid QuestFrame/Quest Log/Gossip
 replacement, new narration completion and both Full/Split modes in-game.
 Speech methods do not
 extract quest text, resolve voices, or control Talking Head behavior.
+
+For the Emergency STOP investigation, the user confirmed audible old prefetched
+playback in Forever: replacement/initial stop at 2101.680, cancelled chunk 3's
+bookmark at 2102.177, its FINISHED at 2104.268, then newer playback. Earlier Toolbox
+experiments with replacement delays 0.0, 0.2 and 1.0 seconds interrupted stale audio
+using another STOP without resubmission; at 5.0 seconds the initial stop sufficed.
+Resubmission produced duplicates. These observations motivate the experiment;
+they do not establish queue-removal or newer-request-survival guarantees.
+
+The mock native layer has no queue or automatic stop acknowledgements. Removed
+scenario fixtures manufactured callbacks inside SpeakText/StopSpeakingText,
+terminal-before-bookmark playback recovery and completion followed by a submission exception.
+The observed trace checks only addon reactions. Deferral is checked directly with
+the Lua stop guard, not by asserting that native STOP emits a particular sequence.
+Remaining logic checks do not establish native event ordering or playback timing.
+
+### Temporary lifecycle diagnostics
+
+`Core/TTSDiagnostics.lua` is a removable observer loaded immediately before TTS.
+It keeps the latest 200 timestamped events in a ring buffer, plus formats bounded
+current/retired state snapshots. The recorder uses IDs and decisions, never quest
+text or callbacks, and prints nothing. Times use the client `GetTime()` timebase.
+Recorder errors are isolated from playback decisions. Removing this file and its
+TOC entry leaves essential state tracking and cancellation functional; recorder
+removal is covered by standalone mocks.
+
+`_G.OutLoud.GetTTSReport()` returns the complete report as one string. In Toolbox
+Lua Console, run this standalone script to open its existing export dialog directly:
+
+```lua
+Toolbox.UI.ExportDialog:Show("Out Loud TTS report", _G.OutLoud.GetTTSReport(), 900, 650)
+```
+
+Alternatively, `return _G.OutLoud.GetTTSReport()` returns one Console result for
+the Console's EXPORT TEXT action. Neither approach prints report lines to chat.
+The export call was checked against local Toolbox source; its live rendering is
+not established by the mocks.
+
+For manual verification after `/reload`, use Pocket TTS in Split with at least
+three sentences. Check normal sentence transitions and completion, close while B
+plays and C is prefetched, replace that narration with another quest, and repeat
+several rapid replacements. Capture the report promptly after stale audio or an
+unexpected spinner/completion. Confirm newer requests are submitted once and
+stale bookmarks do not advance presentation. On a qualifying stale bookmark,
+check for one `emergency-stop-performed` record and listen for interruption of old
+audio followed by the original newer request playing once. Check skipped recovery
+when newer ownership is already known, another native ID is unidentified, or that
+session has already used its recovery budget. A reported successful stop is not
+proof that the newer request survived; capture unresolved cases without retrying.
+Also verify Split-to-Full and Full-to-Split replacement, ordinary Full playback,
+and completion/cancel through QuestFrame, Quest Log and Gossip. Native stopping,
+silently purged requests, audible duplicates, event timing and UI rendering still
+require these WoW: Forever checks. No live TTS tests were run for this redesign.
 
 The user reported successful Pocket TTS and Microsoft Zira Desktop narration in
 both Full and Split modes before this hardening pass. The revised event recovery

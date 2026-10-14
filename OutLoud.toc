@@ -12,6 +12,7 @@ Core\Namespace.lua
 Core\NPCInspection.lua
 Core\VoiceSelection.lua
 Core\Database.lua
+Core\TTSDiagnostics.lua
 Core\TTS.lua
 Core\Narration.lua
 

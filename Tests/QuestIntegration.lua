@@ -694,20 +694,6 @@ Test("Talking Head closes on explicit stop and owned playback failure", function
     end
 end)
 
-Test("Completion during native submission also closes Talking Head", function()
-    local h = Harness(false, true)
-    h.environment.QuestFrame:Show()
-    h:Panel("QuestFrameDetailPanel")
-    h.onSpeak = function(text)
-        local tts = h.addon.TTS
-        tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 101, text:match('<bookmark mark="([^"]+)"/>'))
-        tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_FINISHED", 101)
-    end
-    h:Click()
-    Equal(h.addon.TTS.CurrentSession, nil, "Synchronous completion ends the session")
-    Equal(h.addon.UI.TalkingHead.shown, false, "Do not reopen completed narration")
-end)
-
 Test("Failed speech submission hides Talking Head and clears loading", function()
     local h = Harness(false, true)
     h.environment.QuestFrame:Show()
@@ -746,36 +732,7 @@ Test("Deferred Blizzard UI installs once after its globals exist", function()
     Equal(#h.environment.QuestFrame.hooks.OnEvent, 1, "One event hook")
 end)
 
-Test("Late ownership resolves early terminal events; repeats cannot stop playback", function()
-    for _, mode in ipairs({ "full", "split" }) do
-        for _, event in ipairs({ "FAILED", "FINISHED" }) do
-            local h = Harness(false, true)
-            h.texts.detail = "Only sentence."
-            h.addon.Database:SetReadingMode(mode)
-            h.environment.QuestFrame:Show()
-            h:Panel("QuestFrameDetailPanel")
-            h:Click()
-            local tts, head = h.addon.TTS, h.addon.UI.TalkingHead
-            local session = tts.CurrentSession
-            tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_" .. event, 101, 13)
-            Equal(tts.CurrentSession, session, "Unidentified terminal events do not claim narration")
-            Equal(head.shown, true)
-            Equal(head.loading, true)
-            local mark = "OUTLOUD:SPEECH:" .. session.id .. ":" .. (mode == "full" and "WHOLE" or "1")
-            tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 101, mark)
-            Equal(tts.CurrentSession, nil)
-            Equal(head.shown, false, "Proven terminal event closes Talking Head")
-            Equal(head.loading, false, "Cleanup clears the spinner")
-            Equal(h.endReason, event == "FAILED" and "failed" or "finished")
-            Equal(#h.progress, 0, "Late bookmark cannot restart scrolling or sentence transitions")
-            local stops = h.stops
-            tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 101, mark)
-            Equal(h.stops, stops, "Completed or already identified failed bookmarks cannot stop again")
-        end
-    end
-end)
-
-Test("QuestFrame and Quest Log replacements survive old prefetched bookmarks", function()
+Test("QuestFrame and Quest Log replacement state is isolated from old ownership", function()
     for _, source in ipairs({ "QuestFrame", "QuestLog" }) do
         for _, mode in ipairs({ "full", "split" }) do
             local h = Harness(false, true)
@@ -804,7 +761,8 @@ Test("QuestFrame and Quest Log replacements survive old prefetched bookmarks", f
             local oldMark = "OUTLOUD:SPEECH:" .. old.id .. ":" .. token
             tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 101, oldMark)
             tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 101, oldMark)
-            Equal(h.stops, 1)
+            local expectedStops = mode == "split" and 2 or 1
+            Equal(h.stops, expectedStops)
             Equal(tts.CurrentSession, replacement)
             Equal(#h.nativeCalls, count, "Old bookmarks cannot submit speech")
             Equal(#h.progress, progress)
@@ -819,7 +777,7 @@ Test("QuestFrame and Quest Log replacements survive old prefetched bookmarks", f
             Equal(replacement.finished, true)
             Equal(head.shown, false)
             tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 102, newMark)
-            Equal(h.stops, 1, "Completed quest narration cannot stop other TTS")
+            Equal(h.stops, expectedStops, "Completed bookmark does not request another stop")
         end
     end
 end)

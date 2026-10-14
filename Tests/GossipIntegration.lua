@@ -413,7 +413,8 @@ Test("Repeated clicks replace sessions; stale bookmarks cannot update the new co
         tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 101, oldMark)
         tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 101, oldMark)
         tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_FINISHED", 101)
-        Equal(h.stops, 1, "Stale bookmarks cannot globally stop the new narration")
+        local expectedStops = mode == "split" and 2 or 1
+        Equal(h.stops, expectedStops, "Split may request one experimental stop; Full policy is preserved")
         Equal(tts.CurrentSession, replacement)
         Equal(head.loading, true)
         Equal(#h.progress, progress)
@@ -430,7 +431,7 @@ Test("Repeated clicks replace sessions; stale bookmarks cannot update the new co
         Equal(head.shown, false)
         Equal(head.loading, false)
         tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 102, h.calls[newCall].mark)
-        Equal(h.stops, 1, "Completed bookmarks cannot stop other speech")
+        Equal(h.stops, expectedStops, "Completed bookmark does not request another stop")
     end
 end)
 
