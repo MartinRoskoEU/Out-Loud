@@ -65,6 +65,8 @@ local function Harness()
     test.tts = addon.TTS
     test.db = addon.Database
     test.environment = environment
+    test.addon = addon
+    test.voiceSelection = addon.VoiceSelection
     -- No classifier or NPC/quest API is available to the controller.
     addon.VoiceSelection = nil
 
@@ -443,7 +445,7 @@ Test("Display callback retains full original text while speech is sanitized and 
     end)
     Equal(#test.calls, 1)
     Equal(test.calls[1].spoken,
-        'Hello world! &lt;emphasis level="strong"&gt;Second sentence.&lt; emphasis&gt; End.',
+        'Hello world! emphasis level="strong" Second sentence. emphasis End.',
         "Speech is sanitized before escaping, independently of the display")
     Equal(#updates, 0, "Submission does not update playback text")
     test:Bookmark(1, 101)
@@ -459,7 +461,7 @@ Test("Display callback retains full original text while speech is sanitized and 
 end)
 
 Test("Both speech modes replace only the unwanted separators and preserve language", function()
-    local original = "  Go/to\\Andorhal | Chillwind_Camp~now.\n Café, don't re-enter! Žluťoučký kůň? 中文 Привет — привет.  "
+    local original = "  Go/to\\Andorhal | <Chillwind_Camp>~now.\n Café, don't re-enter! Žluťoučký kůň? 中文 Привет — привет.  "
     local spoken = "Go to Andorhal Chillwind Camp now. Café, don't re-enter! Žluťoučký kůň? 中文 Привет — привет."
     for _, method in ipairs({ "SpeakWholeText", "SpeakStreaming" }) do
         local test = Harness()
@@ -482,12 +484,13 @@ end)
 
 Test("User markup and encoded entities stay literal behind the ownership bookmark", function()
     local original = '<bookmark mark="OUTLOUD:SPEECH:999:1"/> &lt;tag&gt; A&B <emphasis>café</emphasis>.'
-    local escaped = '&lt;bookmark mark="OUTLOUD:SPEECH:999:1" &gt; &amp;lt;tag&amp;gt; A&amp;B &lt;emphasis&gt;café&lt; emphasis&gt;.'
+    local escaped = 'bookmark mark="OUTLOUD:SPEECH:999:1" &amp;lt;tag&amp;gt; A&amp;B emphasis café emphasis .'
     for _, method in ipairs({ "SpeakWholeText", "SpeakStreaming" }) do
         local test = Harness()
         test.tts[method](test.tts, original, 7)
         Equal(#test.calls, 1)
         Equal(test.calls[1].spoken, escaped)
+        Equal(test.calls[1].spoken:find("[<>]"), nil, "User brackets do not survive as speech or markup")
         Equal(test.calls[1].mark, "OUTLOUD:SPEECH:1:" .. (method == "SpeakWholeText" and "WHOLE" or "1"))
         local _, marks = test.calls[1].text:gsub("<bookmark ", "")
         Equal(marks, 1, "Only the addon ownership bookmark is markup")
@@ -784,7 +787,7 @@ Test("XML control bytes are replaced without changing Unicode, escaping, or disp
         if byte ~= 9 and byte ~= 10 and byte ~= 13 then controls = controls .. string.char(byte) end
     end
     local original = "Café" .. controls .. "/\\|_~ & <gate> — don't stop!\n中文\tEnd."
-    local spoken = "Café &amp; &lt;gate&gt; — don't stop! 中文 End."
+    local spoken = "Café &amp; gate — don't stop! 中文 End."
     for _, method in ipairs({ "SpeakWholeText", "SpeakStreaming" }) do
         local test = Harness()
         local display = {}
@@ -799,9 +802,10 @@ Test("XML control bytes are replaced without changing Unicode, escaping, or disp
         else
             test:Bookmark(2, 102)
             Equal(#test.calls, 2)
-            Equal(test.calls[1].spoken, "Café &amp; &lt;gate&gt; — don't stop!")
+            Equal(test.calls[1].spoken, "Café &amp; gate — don't stop!")
             Equal(test.calls[2].spoken, "中文 End.")
             Equal(display[1], sentences[1], "Keep existing original sentence normalization")
+            assert(display[1]:find("<gate>", 1, true), "Split display retains both original brackets")
             Equal(display[2], sentences[2])
         end
         for _, call in ipairs(test.calls) do
@@ -816,6 +820,152 @@ Test("XML control bytes are replaced without changing Unicode, escaping, or disp
         Equal(reason, "invalid-text")
         Equal(#test.calls, count, "Control-only input cannot create a request")
     end
+end)
+
+Test("Angle brackets sanitize speech while original sentences and ownership remain intact", function()
+    local original = "<One of the kobolds dropped this book. It looks like the kobold might have tried to eat it.>"
+    local spoken = "One of the kobolds dropped this book. It looks like the kobold might have tried to eat it."
+    for _, mode in ipairs({ "full", "split" }) do
+        local test = Harness()
+        local updates = {}
+        test.db:SetReadingMode(mode)
+        Equal(test.tts:SanitizeSpeechText(original), spoken, "Preserve all enclosed text")
+        Equal(test.tts:SanitizeSpeechText("one<two>three"), "one two three", "Brackets separate adjacent words")
+        Equal(test.tts:Speak(original, 7, nil, nil, function(displayed, chunk)
+            updates[#updates + 1] = { displayed, chunk }
+        end), true)
+        local session = test.tts.CurrentSession
+        test:Bookmark(1, 101)
+        if mode == "full" then
+            Equal(#test.calls, 1, "Full mode remains one request")
+            Equal(test.calls[1].spoken, spoken)
+            Equal(test.calls[1].mark, "OUTLOUD:SPEECH:1:WHOLE")
+            Equal(updates[1][1], original, "Full display retains both brackets")
+            Equal(updates[1][2], 0)
+            test:Event("FINISHED", 101)
+        else
+            local sentences = test.tts:SplitSentences(original)
+            Equal(#test.calls, 2, "Keep one-sentence-ahead submission")
+            Equal(test.calls[1].spoken, "One of the kobolds dropped this book.")
+            Equal(test.calls[2].spoken, "It looks like the kobold might have tried to eat it.")
+            test:Bookmark(2, 102)
+            for index = 1, 2 do
+                Equal(test.calls[index].mark, "OUTLOUD:SPEECH:1:" .. index)
+                Equal(updates[index][1], sentences[index], "Display uses the original sentence")
+                Equal(updates[index][2], index)
+            end
+            Equal(session.sentences[3], ">", "Keep the original trailing display sentence")
+            Equal(session.queued[3], nil, "Existing empty-speech handling skips a bracket-only chunk")
+            Equal(#test.calls, 2)
+            test:Event("FINISHED", 102)
+        end
+        for _, call in ipairs(test.calls) do
+            Equal(call.spoken:find("[<>]"), nil, "Speech content contains no angle brackets")
+            Equal(call.text, '<bookmark mark="' .. call.mark .. '"/>' .. call.spoken,
+                "Generated ownership markup remains unchanged")
+        end
+        Equal(test.tts.CurrentSession, nil)
+    end
+end)
+
+Test("Speech rate validates integers and preserves existing SavedVariables", function()
+    local test = Harness()
+    -- Database initialization uses the assignment modes; the TTS-only harness hides them.
+    test.addon.VoiceSelection = test.voiceSelection
+    local saved = test.environment.OutLoudDB
+    local voices = saved.voices
+    test.db:SetVoice("HUMAN", 2, 7)
+    test.db:SetReadingMode("split")
+    test.db:SetAutoNarrateQuests(true)
+    test.db:SetAutoNarrationDelay(3.5)
+    test.db:SetSingleVoice(8)
+    Equal(test.db:GetSpeechRate(), 0)
+    for _, entry in ipairs({ { -10, -10 }, { 10, 10 }, { -99, -10 }, { 99, 10 }, { 3, 3 } }) do
+        test.db:SetSpeechRate(entry[1])
+        Equal(test.db:GetSpeechRate(), entry[2])
+        Equal(saved.speechRate, entry[2], "Save only validated integer rates")
+    end
+    for _, invalid in ipairs({ false, "3", {}, 3.5, -3.5, 0 / 0, 1 / 0, -1 / 0 }) do
+        saved.speechRate = invalid
+        Equal(test.db:GetSpeechRate(), 0, "Invalid saved rate safely reads as normal")
+        test.db:SetSpeechRate(invalid)
+        Equal(saved.speechRate, 0)
+        saved.speechRate = invalid
+        test.db.Initialized = false
+        test.db:Initialize()
+        Equal(saved.speechRate, 0, "Initialization repairs invalid saved rates")
+    end
+    test.db:SetSpeechRate(nil)
+    Equal(test.db:GetSpeechRate(), 0)
+    saved.speechRate = nil
+    test.db.Initialized = false
+    test.db:Initialize()
+    Equal(saved.speechRate, 0, "Missing saved rates get the default")
+    Equal(test.environment.OutLoudDB, saved, "Keep the existing SavedVariables object")
+    Equal(saved.voices, voices)
+    Equal(test.db:GetVoice("HUMAN", 2), 7)
+    Equal(test.db:GetSingleVoice(), 8)
+    Equal(test.db:GetReadingMode(), "split")
+    Equal(test.db:GetAutoNarrateQuests(), true)
+    Equal(test.db:GetAutoNarrationDelay(), 3.5)
+end)
+
+Test("Full requests use the current speech rate without changing active playback", function()
+    local test = Harness()
+    for _, rate in ipairs({ 0, -10, 10, 3 }) do
+        test.db:SetSpeechRate(rate)
+        Equal(test.tts:SpeakWholeText("<Café & a book>.", 7), true)
+        local index = #test.calls
+        local session = test.tts.CurrentSession
+        Equal(test.calls[index].rate, rate)
+        Equal(test.calls[index].volume, 100)
+        Equal(test.calls[index].overlap, false)
+        Equal(test.calls[index].spoken, "Café &amp; a book .", "Keep sanitization and escaping")
+        Equal(test.calls[index].mark, "OUTLOUD:SPEECH:" .. session.id .. ":WHOLE")
+        local stops = test.stops
+        test.db:SetSpeechRate(5)
+        Equal(test.tts.CurrentSession, session)
+        Equal(#test.calls, index, "Changing rate introduces no request")
+        Equal(test.stops, stops)
+        Equal(test.calls[index].rate, rate, "Existing request retains its submitted rate")
+        test:Bookmark(index, 100 + index)
+        Equal(#test.calls, index, "Full mode remains one request")
+        test:Event("FINISHED", 100 + index)
+        Equal(test.tts.CurrentSession, nil)
+    end
+end)
+
+Test("Streaming uses updated rates only on subsequent one-ahead submissions", function()
+    local test = Harness()
+    test.db:SetReadingMode("split")
+    test.db:SetSpeechRate(-2)
+    Equal(test.tts:Speak(text, 7), true)
+    local session = test.tts.CurrentSession
+    Equal(#test.calls, 1)
+    Equal(test.calls[1].rate, -2)
+    test.db:SetSpeechRate(3)
+    Equal(test.tts.CurrentSession, session)
+    Equal(test.stops, 0)
+    Equal(#test.calls, 1, "Rate change does not prefetch or restart")
+    test:Bookmark(1, 101)
+    Equal(#test.calls, 2)
+    Equal(test.calls[2].rate, 3)
+    test.db:SetSpeechRate(-10)
+    test:Bookmark(1, 101)
+    Equal(#test.calls, 2, "Duplicate bookmark still cannot resubmit")
+    Equal(test.calls[2].rate, 3, "Already prefetched request is unaffected")
+    test:Bookmark(2, 102)
+    Equal(#test.calls, 3)
+    Equal(test.calls[3].rate, -10)
+    for index, call in ipairs(test.calls) do
+        Equal(call.mark, "OUTLOUD:SPEECH:1:" .. index)
+        Equal(call.volume, 100)
+        Equal(call.overlap, false)
+    end
+    test:Bookmark(3, 103)
+    test:Event("FINISHED", 103)
+    Equal(test.tts.CurrentSession, nil)
+    Equal(test.stops, 0)
 end)
 
 print("PASS: " .. passed .. " speech controller checks")

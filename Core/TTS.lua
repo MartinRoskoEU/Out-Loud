@@ -105,7 +105,7 @@ end
 function TTS:SanitizeSpeechText(text)
     -- XML 1.0 forbids these ASCII controls, including NUL. UTF-8 bytes stay intact.
     return (text:gsub("[%z\1-\8\11\12\14-\31]", " ")
-        :gsub("[/\\|_~]", " "):gsub("%s+", " ")
+        :gsub("[/\\|_~<>]", " "):gsub("%s+", " ")
         :gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
@@ -193,7 +193,7 @@ function TTS:SubmitText(session, text, chunk)
         C_VoiceChat.SpeakText,
         session.voiceID,
         '<bookmark mark="' .. mark .. '"/>' .. EscapeSpeechText(text),
-        0,
+        OutLoud.Database:GetSpeechRate(),
         100,
         false
     )

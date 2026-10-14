@@ -10,6 +10,21 @@ Database.AutoNarrationDelay = {
     STEP = 0.5,
 }
 
+Database.SpeechRate = {
+    DEFAULT = 0,
+    MIN = -10,
+    MAX = 10,
+    STEP = 1,
+}
+
+local function NormalizeSpeechRate(value)
+    local range = Database.SpeechRate
+    if type(value) ~= "number" or value % range.STEP ~= 0 then
+        return range.DEFAULT
+    end
+    return math.max(range.MIN, math.min(range.MAX, value))
+end
+
 local function NormalizeAutoNarrationDelay(value)
     local range = Database.AutoNarrationDelay
     if type(value) ~= "number" or value ~= value then
@@ -51,6 +66,7 @@ function Database:Initialize()
     db.readingMode = NormalizeReadingMode(db.readingMode)
     db.voiceMode = NormalizeVoiceMode(db.voiceMode)
     db.autoNarrationDelay = NormalizeAutoNarrationDelay(db.autoNarrationDelay)
+    db.speechRate = NormalizeSpeechRate(db.speechRate)
 
     self.DB = db
     OutLoud.DB = db
@@ -116,4 +132,12 @@ end
 
 function Database:SetAutoNarrationDelay(delay)
     self.DB.autoNarrationDelay = NormalizeAutoNarrationDelay(delay)
+end
+
+function Database:GetSpeechRate()
+    return NormalizeSpeechRate(self.DB.speechRate)
+end
+
+function Database:SetSpeechRate(rate)
+    self.DB.speechRate = NormalizeSpeechRate(rate)
 end

@@ -132,8 +132,12 @@ function SettingsPage:UpdateScrollLayout()
     if self.AutoNarrationDelayDescription then
         self.AutoNarrationDelayDescription:SetWidth(descriptionWidth)
     end
+    if self.SpeechRateDescription then
+        self.SpeechRateDescription:SetWidth(descriptionWidth)
+    end
 
-    local lastDescription = self.AutoNarrationDelayDescription or self.AutoNarrateDescription or self.SplitDescription
+    local lastDescription = self.SpeechRateDescription or self.AutoNarrationDelayDescription
+        or self.AutoNarrateDescription or self.SplitDescription
     local top, bottom = content:GetTop(), lastDescription:GetBottom()
     if top and bottom then
         content:SetHeight(math.max(1, top - bottom + 24))
@@ -489,6 +493,64 @@ function SettingsPage:RefreshAutoNarrationDelay()
     self.AutoNarrationDelayDescription:SetFontObject(enabled and GameFontHighlightSmall or GameFontDisableSmall)
 end
 
+function SettingsPage:RefreshSpeechRate()
+    local control = self.SpeechRateSlider
+    if not control then return end
+    self.SyncingSpeechRate = true
+    control:SetValue(OutLoud.Database:GetSpeechRate())
+    self.SyncingSpeechRate = false
+    control:SetEnabled(true)
+end
+
+function SettingsPage:CreateSpeechRateControl(anchor)
+    local label = self.Content:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    label:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", -21, -18)
+    label:SetText("Speech Rate")
+
+    local control = CreateFrame("Frame", nil, self.Content, "MinimalSliderWithSteppersTemplate")
+    ---@cast control OutLoudSettingsDelaySlider
+    control:SetWidth(250)
+    control:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -8)
+    local range = OutLoud.Database.SpeechRate
+    control:Init(OutLoud.Database:GetSpeechRate(), range.MIN, range.MAX,
+        (range.MAX - range.MIN) / range.STEP, {
+            [control.Label.Right] = function(value)
+                return string.format(value > 0 and "+%d" or "%d", value)
+            end,
+            [control.Label.Min] = function() return "-10 (Slower)" end,
+            [control.Label.Max] = function() return "+10 (Faster)" end,
+        })
+    control:RegisterCallback(control.Event.OnValueChanged, function(_, value)
+        if not self.SyncingSpeechRate then
+            OutLoud.Database:SetSpeechRate(value)
+            self:RefreshSpeechRate()
+        end
+    end, self)
+    control:HookScript("OnShow", function() self:RefreshSpeechRate() end)
+
+    local reset = CreateFrame("Button", nil, self.Content, "UIPanelButtonTemplate")
+    reset:SetSize(100, 22)
+    reset:SetPoint("LEFT", control, "RIGHT", 72, 0)
+    reset:SetText("Reset to 0")
+    reset:SetScript("OnClick", function()
+        OutLoud.Database:SetSpeechRate(range.DEFAULT)
+        self:RefreshSpeechRate()
+    end)
+
+    local description = self.Content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    description:SetPoint("TOPLEFT", control, "BOTTOMLEFT", 21, -18)
+    description:SetWidth(620)
+    description:SetJustifyH("LEFT")
+    description:SetJustifyV("TOP")
+    description:SetWordWrap(true)
+    description:SetText("Adjusts the speed of spoken narration. Zero is the normal speech rate.")
+    self.SpeechRateSlider = control
+    self.SpeechRateLabel = label
+    self.SpeechRateResetButton = reset
+    self.SpeechRateDescription = description
+    self:RefreshSpeechRate()
+end
+
 function SettingsPage:CreateReadingSection(anchor)
     local header = CreateFrame(
         "Frame",
@@ -717,4 +779,5 @@ function SettingsPage:CreateReadingSection(anchor)
     self.AutoNarrationDelayLabel = delayLabel
     self.AutoNarrationDelayDescription = delayDescription
     self:RefreshAutoNarrationDelay()
+    self:CreateSpeechRateControl(delayDescription)
 end

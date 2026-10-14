@@ -105,6 +105,11 @@ not apply to Quest Log. **Automatic narration delay** waits 2 seconds by default
 adjustable from 0 to 5 seconds in 0.5-second steps. The delay control is available
 when automatic narration is enabled. Manual narration always starts immediately.
 
+**Speech Rate** adjusts narration speed from -10 (Slower) to +10 (Faster) in
+integer steps. The default is 0 (Normal), restored with **Reset to 0**. It is
+available regardless of automatic narration and affects subsequent speech
+requests without restarting current playback.
+
 ## Project Status
 
 The mappings, saved voice configuration, voice resolver, Talking Head UI, TTS

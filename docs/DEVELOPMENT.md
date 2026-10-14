@@ -168,8 +168,9 @@ prefetches one sentence ahead. A display callback cannot alter the generation te
 
 Speak methods return `true` when submission succeeds, or `false` plus a reason:
 `invalid-text`, `invalid-voice`, `no-sentences`, or `speech-failed`. A supplied
-voice ID must be a nonnegative integer; `0` is valid. Rate is `0`, volume is
-`100`, and overlap is `false`. Initialization creates the event frame once and
+voice ID must be a nonnegative integer; `0` is valid. Rate comes from
+`Database:GetSpeechRate()` on each request (default `0`), volume is `100`, and
+overlap is `false`. Initialization creates the event frame once and
 disables Blizzard's line-separator sound once.
 
 ## Sessions, cancellation, and known limitations
@@ -389,6 +390,30 @@ such as `0 s`, `0.5 s`, and `2 s`; `OnValueChanged` saves changes. `SetEnabled()
 disables both the slider and its stepper buttons when automatic narration is off.
 Checkbox changes and opening the controls refresh the saved value and enabled
 state, with programmatic refreshes excluded from saving.
+
+**Speech Rate** follows the delay control and reuses
+`MinimalSliderWithSteppersTemplate`, with 20 steps across -10 to +10. The local
+Forever export's `Blizzard_ChatFrame/Shared/TextToSpeechCommands.lua` defines
+`TEXTTOSPEECH_RATE_MIN = -10` and `TEXTTOSPEECH_RATE_MAX = 10`;
+`VoiceChatDocumentation.lua` confirms the numeric `SpeakText` rate argument.
+The slider displays the integer value, prefixes positive values with `+`, and
+labels its endpoints Slower/Faster. A native `UIPanelButtonTemplate` button
+resets it to 0. Both controls remain enabled independently of automatic narration.
+
+`OutLoudDB.speechRate` defaults to `0`. `Database.SpeechRate` supplies the shared
+bounds and step; initialization, `GetSpeechRate()`, and `SetSpeechRate(rate)`
+validate values. Out-of-range integers are clamped; missing, nonnumeric,
+fractional, or nonfinite values fall back to 0. Existing settings are retained.
+The shared TTS submission reads this setting for every full-text or sentence
+request. Changing it does not restart playback; an already prefetched sentence
+retains its submitted rate. No global Blizzard speech-rate setting is modified.
+
+Standalone/mock checks cover validation, saved-value reloads, slider step and
+formatters, reset, and Full/Split request parameters with unchanged bookmarks
+and lifecycle. In-game verification is still required for slider rendering,
+stepper/drag interaction, `/reload` persistence, and audible speed at -10, 0,
+and +10 in both reading modes. Check rate changes during split playback and
+confirm subsequent submissions adopt the new rate without interrupting audio.
 
 Only the existing `QuestFrame` `OnEvent` post-hook schedules automatic narration,
 after Blizzard handles the event and Out Loud refreshes button visibility:

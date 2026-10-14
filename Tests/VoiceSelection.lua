@@ -101,6 +101,7 @@ end
 local frames = {}
 function environment.CreateFrame(kind, _name, parent, template)
     local frame = Frame(parent)
+    frame.template = template
     if template == "SettingsListSectionHeaderTemplate" then frame:SetHeight(20) end
     if template == "UIRadioButtonTemplate" then frame:SetSize(16, 16) end
     if template == "SettingsCheckboxTemplate" then
@@ -112,7 +113,7 @@ function environment.CreateFrame(kind, _name, parent, template)
         function frame:SetValue(value) self.value = value end
     elseif template == "MinimalSliderWithSteppersTemplate" then
         frame:SetSize(250, 40)
-        frame.Label = { Right = 2 }
+        frame.Label = { Right = 2, Min = 4, Max = 5 }
         frame.Event = { OnValueChanged = "OnValueChanged" }
         function frame:Init(value, minimum, maximum, steps, formatters)
             self.value, self.minimum, self.maximum = value, minimum, maximum
@@ -242,6 +243,36 @@ Equal(settingsPage.VoiceRows[1].MaleComboBox.Dropdown:IsEnabled(), true)
 Equal(initFrame.scripts.OnEvent, nil, "Release initialization callback after loading")
 Equal(addon.Database:GetAutoNarrationDelay(), 2, "Automatic delay default")
 Equal(settingsPage.AutoNarrationDelaySlider.enabled, false, "Delay control disabled by default")
+Equal(addon.Database:GetSpeechRate(), 0, "Existing SavedVariables receive the normal rate")
+local rateSlider = settingsPage.SpeechRateSlider
+Equal(rateSlider.template, settingsPage.AutoNarrationDelaySlider.template, "Reuse the same native slider")
+Equal(rateSlider.parent, settingsPage.Content, "Rate slider remains inside scroll content")
+Equal(rateSlider.minimum, -10)
+Equal(rateSlider.maximum, 10)
+Equal(rateSlider.step, 1, "Native rate step is exactly one")
+Equal(rateSlider.enabled, true, "Rate remains enabled when automatic narration is off")
+Equal(rateSlider.value, 0)
+Equal(rateSlider.formatters[rateSlider.Label.Right](0), "0")
+Equal(rateSlider.formatters[rateSlider.Label.Right](3), "+3")
+Equal(rateSlider.formatters[rateSlider.Label.Right](-3), "-3")
+Equal(rateSlider.formatters[rateSlider.Label.Min](-10), "-10 (Slower)")
+Equal(rateSlider.formatters[rateSlider.Label.Max](10), "+10 (Faster)")
+rateSlider:SetValue(3)
+Equal(addon.Database:GetSpeechRate(), 3, "Slider changes persist immediately")
+addon.Database:SetAutoNarrateQuests(true)
+settingsPage:RefreshAutoNarrationDelay()
+Equal(rateSlider.enabled, true, "Automatic narration does not gate speech rate")
+addon.Database:SetAutoNarrateQuests(false)
+settingsPage:RefreshAutoNarrationDelay()
+Equal(rateSlider.enabled, true)
+settingsPage.SpeechRateResetButton.scripts.OnClick()
+Equal(addon.Database:GetSpeechRate(), 0, "Reset restores normal rate")
+Equal(rateSlider.value, 0, "Reset refreshes the native slider")
+addon.Database:SetSpeechRate(-4)
+rateSlider:Show()
+Equal(rateSlider.value, -4, "Opening the control reads the saved rate")
+addon.Database:SetSpeechRate(0)
+settingsPage:RefreshSpeechRate()
 addon.Database:SetReadingMode("invalid")
 Equal(addon.Database:GetReadingMode(), "full", "Invalid reading mode uses the existing full default")
 addon.Database:SetReadingMode("split")
@@ -448,12 +479,15 @@ addon.Database:SetVoice("HUMAN", 2, 0)
 -- A freshly loaded database reads both independent settings from SavedVariables.
 local reloaded = { VoiceSelection = selection, TTS = addon.TTS }
 local reloadDatabase = assert(LoadFile("Core/Database.lua"))
+addon.Database:SetSpeechRate(4)
 setfenv(reloadDatabase, environment)
 reloadDatabase("OutLoud", reloaded)
 reloaded.Database:Initialize()
 Equal(reloaded.Database:GetVoiceMode(), "single", "Assignment mode persists after reload")
 Equal(reloaded.Database:GetSingleVoice(), 20, "Narrator voice persists after reload")
 Equal(reloaded.Database:GetVoice("SKYBORNE", 2), skyborneMale, "Family assignments persist after reload")
+Equal(reloaded.Database:GetSpeechRate(), 4, "Speech rate persists in a freshly loaded database")
+addon.Database:SetSpeechRate(0)
 addon.Database:SetVoiceMode("invalid")
 Equal(addon.Database:GetVoiceMode(), "raceGender", "Invalid modes normalize to the existing behavior")
 settingsPage:RefreshVoiceAssignment()
@@ -568,6 +602,7 @@ settingsPage.ScrollFrame:SetWidth(600)
 settingsPage:UpdateScrollLayout()
 Equal(settingsPage.Content:GetWidth(), 600, "Content follows viewport width")
 Equal(settingsPage.SplitDescription:GetWidth(), 555, "Descriptions fit narrower content")
+Equal(settingsPage.SpeechRateDescription:GetWidth(), 555, "Speech-rate description follows the same wrapping")
 Equal(settingsPage.VoiceRows[1].MaleComboBox.Frame:GetWidth(), 207.5, "Voice columns fit the current indented layout")
 Equal(settingsPage.VoiceRows[1].MaleComboBox.Dropdown:GetWidth(), 127.5, "Dropdown follows control width")
 settingsPage.ScrollFrame:SetWidth(760)
