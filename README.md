@@ -31,20 +31,21 @@ and the loading spinner clears when owned playback begins.
 - Optional automatic narration for quest offer, progress, and reward pages,
   disabled by default. Manual buttons remain available.
 - A manual **Out Loud** button for quest offer, progress, and reward dialogue.
-  It uses the current NPC's portrait and selected voice, falling back to the player
-  when the NPC cannot be used, and reads the current dialogue.
+  Single Voice shows the player portrait and quest title. Multiple Voices uses
+  the NPC portrait/name, with the existing player fallback, and reads the same dialogue.
   Talking Head closes when narration finishes or stops.
   The button hides on quest greeting/list screens and when the quest window closes.
 - A manual **Out Loud** button opposite **Back** in selected Quest Log details.
-  It reads the description using the player's portrait, name, and configured
+  It reads the description using the player's portrait, the selected quest title, and configured
   voice. Gameplay objectives are excluded.
 
 ## How Voice Selection Works
 
 **Single Voice** uses the selected Narrator Voice for NPC, player, automatic,
-and Quest Log narration. NPCs with usable models keep their portrait and name,
-including NPCs without a mapped family. Missing NPCs or models use the player as
-speaker. An unset or unavailable narrator voice stops narration with an error.
+and Quest Log narration. Talking Head always shows the player model and quest
+title for these sources. An unset or unavailable narrator voice stops narration
+with an error. Quest Log also shows the player model and quest title when using
+Multiple Voices.
 
 **Race & Gender** is the default and preserves the existing resolution and
 player fallback. The resolver reads two independent properties of the NPC:
@@ -126,9 +127,9 @@ The addon separates voice resolution, speech, and presentation:
 - The TTS controller speaks supplied text with a supplied voice and applies the
   selected speech mode.
 - Talking Head provides the speaker portrait, dialogue display, and loading state.
-- Quest integrations supply live dialogue with the NPC as speaker, or a selected
-  quest description with the player as speaker. A shared narration controller
-  coordinates Talking Head with the TTS lifecycle.
+- Quest integrations supply live dialogue and choose the displayed model and title
+  independently of voice resolution. A shared narration controller coordinates
+  Talking Head with the TTS lifecycle.
 
 ## Development
 

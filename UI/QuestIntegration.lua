@@ -163,6 +163,13 @@ function QuestIntegration:SpeakCurrentText()
     end
     OutLoud:Debug("Quest text:", textSource, "bytes:", #text)
 
+    local singleVoice = OutLoud.VoiceSelection:IsSingleVoiceMode()
+    local displayTitle
+    if singleVoice then
+        -- Capture the dialogue title now; later quest UI changes cannot replace it.
+        displayTitle = type(GetTitleText) == "function" and GetTitleText() or ""
+    end
+
     local speakerUnit = "questnpc"
     local voiceID, info
     if not UnitExists("questnpc") then
@@ -199,7 +206,10 @@ function QuestIntegration:SpeakCurrentText()
             "Voice:", tostring(voiceID))
     end
 
-    return OutLoud.Narration:Speak(speakerUnit, text, voiceID)
+    if singleVoice then
+        speakerUnit = "player"
+    end
+    return OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitle)
 end
 
 function QuestIntegration:Initialize()

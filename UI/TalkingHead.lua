@@ -206,7 +206,7 @@ function TalkingHead:ResetAnimations()
     end
 end
 
-function TalkingHead:Show(unit, text)
+function TalkingHead:Show(unit, text, displayTitle)
     if not unit or not UnitExists(unit) then
         self:Hide()
         return
@@ -257,7 +257,12 @@ function TalkingHead:Show(unit, text)
         self.Model:SetPortraitZoom(1)
     end
 
-    self.NameText:SetText(UnitName(unit) or "Unknown")
+    if displayTitle == nil then
+        displayTitle = UnitName(unit) or "Unknown"
+    elseif type(displayTitle) ~= "string" or not displayTitle:find("%S") then
+        displayTitle = "Quest"
+    end
+    self.NameText:SetText(displayTitle)
     local readingMode = OutLoud.Database:GetReadingMode()
     self.DisplayChunk = readingMode == OutLoud.TTS.ReadingModes.SPLIT and 1 or 0
     local displayed = text or ""

@@ -48,12 +48,15 @@ function QuestLogIntegration:UpdateButtonVisibility()
 end
 
 function QuestLogIntegration:SpeakCurrentText()
-    local description, reason = self:GetCurrentText()
+    local description, reason, questID = self:GetCurrentText()
     if not description then
         OutLoud:Error("Quest Log read stopped:", reason)
         return
     end
 
+    -- Use the ID captured with the description, independent of later selection changes.
+    local displayTitle = type(C_QuestLog.GetTitleForQuestID) == "function"
+        and C_QuestLog.GetTitleForQuestID(questID) or ""
     local voiceID, info = OutLoud.VoiceSelection:ResolvePlayer()
     if voiceID == nil then
         if info.reason == "voice-not-set" then
@@ -66,7 +69,7 @@ function QuestLogIntegration:SpeakCurrentText()
         return
     end
 
-    return OutLoud.Narration:Speak("player", description, voiceID)
+    return OutLoud.Narration:Speak("player", description, voiceID, displayTitle)
 end
 
 function QuestLogIntegration:Initialize()

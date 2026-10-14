@@ -4,13 +4,13 @@ local Narration = {}
 OutLoud.Narration = Narration
 
 -- Shared presentation callbacks; TTS continues to own speech sessions/bookmarks.
-function Narration:Speak(unit, text, voiceID)
+function Narration:Speak(unit, text, voiceID, displayTitle)
     local talkingHead = OutLoud.UI.TalkingHead
     -- Replace ownership before Speak cancels the previous session.
     local narration = {}
     self.Narration = narration
     OutLoud:Debug("Showing Talking Head.")
-    talkingHead:Show(unit, text)
+    talkingHead:Show(unit, text, displayTitle)
     talkingHead:SetLoading(true)
     OutLoud:Debug("Talking Head visible:", talkingHead.Frame and talkingHead.Frame:IsShown() or false)
 

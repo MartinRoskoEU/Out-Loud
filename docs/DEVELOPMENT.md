@@ -47,9 +47,10 @@ uses `Database:GetSingleVoice()` and checks it against the existing
 `TTS:GetVoices()` enumeration. It requires no family/race/gender lookup and
 returns `single-voice-not-set` or `single-voice-unavailable` for an unusable
 selection, without choosing a fallback voice or clearing the saved value.
-Unit availability and NPC model readiness still apply to speaker presentation:
-an unmapped NPC with a usable model stays the speaker, while missing/unready
-NPCs use the existing player presentation fallback with the same narrator voice.
+The existing resolver paths remain unchanged. Presentation is selected separately:
+Single Voice QuestFrame narration always shows the player model and captured quest
+title. Multiple Voices keeps NPC model/name presentation and player fallback.
+Quest Log always shows the player model and captured quest title in both modes.
 
 Both assignment modes now use `VoiceSelection:IsVoiceAvailable(voiceID)` against
 the same cached API list. An unavailable family assignment returns
@@ -318,17 +319,26 @@ calls `SetUnit("questnpc")`, then calls
 ID, including `0`, keeps the NPC as speaker. Missing NPC/model, unresolved model
 or family, unsupported gender, and missing or invalid configured voice instead
 fall back once to the existing `VoiceSelection:ResolvePlayer()` used by Quest Log.
-Those family/gender failure rules apply in Race & Gender mode. Single Voice
-keeps a usable NPC model regardless of its family/gender and uses the narrator
-for player fallback as well. The chosen speaker and unchanged dialogue enter the same presentation lifecycle:
+Those family/gender failure rules apply in Multiple Voices mode. Single Voice
+overrides the displayed unit to `"player"` after the existing voice resolution,
+and captures `GetTitleText()` alongside the dialogue at narration start.
+The chosen model unit, title, and unchanged dialogue enter the same presentation lifecycle:
 
 ```lua
-local ok, reason = OutLoud.Narration:Speak(speakerUnit, text, voiceID)
+local ok, reason = OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitle)
 ```
 
 The existing Talking Head singleton is under `OutLoud.UI.TalkingHead`, not a
 separate `OutLoud.TalkingHead`. Show receives the current dialogue and prepares
 the complete text or first normalized sentence according to the saved reading mode.
+`TalkingHead:Show(unit, text, displayTitle)` accepts an optional independent title;
+omitting it retains `UnitName(unit)`, preserving Multiple Voices speaker names.
+Quest narration passes an empty override if its title is missing, which displays
+`"Quest"` instead of a previous title or a unit name. The title is set once per
+Show; loading, sentence transitions, and completion never reread quest UI state.
+The title getters were checked against the local Forever export's `QuestInfo.lua`,
+`QuestFrame.lua`, and `QuestLogDocumentation.lua`; their live results across
+Detail/Progress/Reward and Quest Log still require in-game verification.
 The TTS dispatcher applies the existing reading mode and owns cancellation/restart;
 quest integration never selects streaming/full methods or splits sentences itself.
 If `Speak()` returns `false`, integration calls `talkingHead:Hide()`, which also
@@ -450,8 +460,10 @@ there is no polling or forced Blizzard addon loading.
 Every click rereads `C_QuestLog.GetSelectedQuest()`, resolves its log index with
 `C_QuestLog.GetLogIndexForQuestID()`, then obtains only the first return value of
 `GetQuestLogQuestText(questIndex)`. Objectives are never submitted. It resolves
-the player's configured voice with `VoiceSelection:ResolvePlayer()` and calls
-`OutLoud.Narration:Speak("player", description, voiceID)`.
+the player's configured voice with `VoiceSelection:ResolvePlayer()` and captures
+`C_QuestLog.GetTitleForQuestID(questID)` using the same validated ID as the description.
+It calls `OutLoud.Narration:Speak("player", description, voiceID, displayTitle)`.
+Later selection changes cannot replace the active narration's title.
 
 Explicit player token mappings are:
 
@@ -671,7 +683,7 @@ verification in WoW: Forever. No in-game execution was performed by the agent.
 
 ### In-game QuestFrame checklist
 
-Configure the NPC's Voice Family and runtime gender voice first, then:
+Select Multiple Voices and configure the NPC's family/gender voice first, then:
 
 1. Open an NPC quest greeting/list: button hidden.
 2. Select a quest offer/detail: button visible without overlapping native controls.
@@ -699,6 +711,14 @@ clicking should use the configured player voice and player portrait/name for the
 same dialogue. Check an item quest with no `questnpc` as well. If player resolution
 also fails, no new presentation or speech should start and a red error should
 explain the failure.
+
+For the quest-title presentation change, repeat Detail, Progress, and Reward with
+Single Voice and confirm the player model plus current quest title for manual and
+automatic narration. Check Quest Log in both assignment modes. In Full and Split,
+verify the title through loading, sentence transitions, and completion; switch quest
+selection during playback and confirm it stays captured. Check long titles for
+clipping and missing titles for the generic `"Quest"` fallback. This presentation
+change was source-inspected only; no automated tests were added or run for it.
 
 ### Inspect the current quest NPC
 
