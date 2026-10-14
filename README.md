@@ -1,7 +1,7 @@
 # Out Loud
 
 Out Loud is a World of Warcraft: Forever addon in development for reading quest
-text aloud with configurable voices.
+and NPC gossip text aloud with configurable voices.
 
 ## Overview
 
@@ -9,10 +9,10 @@ Out Loud can use one narrator voice for all speech or choose a configured voice
 from the speaker's family and runtime gender. A Blizzard-style Talking Head shows the speaker and dialogue
 while speech is generated and played.
 
-Manual Out Loud buttons connect current quest dialogue to the NPC's voice, or
+Manual Out Loud buttons connect current quest and gossip dialogue to the NPC's voice, or
 selected Quest Log descriptions to the player's voice, Talking Head, and speech.
 QuestFrame narration can also start automatically when enabled in Options;
-Quest Log narration remains manual. Talking Head closes when narration ends,
+Quest Log and gossip narration remain manual. Talking Head closes when narration ends,
 and the loading spinner clears when owned playback begins.
 
 ## Current Features
@@ -38,12 +38,16 @@ and the loading spinner clears when owned playback begins.
 - A manual **Out Loud** button opposite **Back** in selected Quest Log details.
   It reads the description using the player's portrait, the selected quest title, and configured
   voice. Gameplay objectives are excluded.
+- A manual **Out Loud** button beside **Goodbye** in the standard GossipFrame.
+  It reads the current NPC greeting, excluding options and quest lists. Single
+  Voice shows the player portrait with the NPC name; Multiple Voices uses the NPC
+  portrait and family/gender voice, with the existing player narrator fallback.
 
 ## How Voice Selection Works
 
 **Single Voice** uses the selected Narrator Voice for NPC, player, automatic,
-and Quest Log narration. Talking Head always shows the player model and quest
-title for these sources. An unset or unavailable narrator voice stops narration
+and Quest Log narration. Talking Head shows the player model, with the quest
+title for quest sources and the NPC name for gossip. An unset or unavailable narrator voice stops narration
 with an error. Quest Log also shows the player model and quest title when using
 Multiple Voices.
 
@@ -58,8 +62,8 @@ NPC UnitSex      -> Male / Female
 It combines the family and gender to choose the configured voice for that family.
 Gender comes from the live NPC, rather than the model mapping.
 
-If QuestFrame cannot resolve a usable NPC voice, the player reads the same quest
-text using their configured race and gender voice.
+If QuestFrame or GossipFrame cannot resolve a usable NPC voice, the player reads
+the same dialogue using their configured race and gender voice.
 
 Quest Log narration uses the player's race and runtime gender to select from the
 same Voice Family assignments. Unmapped races and unset voices produce an error
@@ -96,12 +100,12 @@ sentence in split mode. Sentence changes use a brief text-only fade.
 Overflowing text scrolls gently once playback begins and has a scrollbar for
 manual reading. Scrolling manually pauses automatic movement for that text.
 
-Both Out Loud quest buttons use this choice. Clicking again restarts narration
+All Out Loud narration buttons use this choice. Clicking again restarts narration
 through the speech controller.
 
 Enable **Automatically read quest text** in the same section to start narration
 when quest details, progress, or reward pages open. It defaults to off and does
-not apply to Quest Log. **Automatic narration delay** waits 2 seconds by default,
+not apply to Quest Log or gossip. **Automatic narration delay** waits 2 seconds by default,
 adjustable from 0 to 5 seconds in 0.5-second steps. The delay control is available
 when automatic narration is enabled. Manual narration always starts immediately.
 
@@ -113,13 +117,15 @@ requests without restarting current playback.
 ## Project Status
 
 The mappings, saved voice configuration, voice resolver, Talking Head UI, TTS
-controller, manual QuestFrame and Quest Log narration, and optional automatic
+controller, manual QuestFrame, Quest Log and GossipFrame narration, and optional automatic
 QuestFrame narration are implemented.
 The dialogue text APIs and NPC voice resolver have been verified in-game by the
 user. The combined button, Talking Head, and speech flow still requires
 verification in WoW: Forever.
 The voice assignment modes and disabled controls have standalone/mock coverage;
 their native UI behavior and combined narration flow still require in-game verification.
+Gossip text retrieval and UI lifecycle were checked against the local Forever
+source; the new button and combined gossip playback require in-game verification.
 
 ## Architecture
 
@@ -132,9 +138,10 @@ The addon separates voice resolution, speech, and presentation:
 - The TTS controller speaks supplied text with a supplied voice and applies the
   selected speech mode.
 - Talking Head provides the speaker portrait, dialogue display, and loading state.
-- Quest integrations supply live dialogue and choose the displayed model and title
+- Quest and gossip integrations supply live dialogue and choose the displayed model and title
   independently of voice resolution. A shared narration controller coordinates
   Talking Head with the TTS lifecycle.
+- One reusable NPC inspection model serves both quest and gossip voice resolution.
 
 ## Development
 

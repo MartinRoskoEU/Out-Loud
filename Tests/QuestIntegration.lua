@@ -82,6 +82,7 @@ local function Harness(deferred, realTTS)
     function environment.UnitName(unit) return unit == "player" and "Test Player" or "Quest NPC" end
     function environment.UnitRace() return "Human", h.playerRaceToken or "Human", 1 end
     function environment.GetQuestID() return h.questID end
+    function environment.GetTitleText() return "Quest title " .. h.questID end
     -- Keep the table-form mock separate from the editor's global API overloads.
     rawset(environment, "hooksecurefunc", function(owner, method, callback)
         local original = assert(owner[method])
@@ -118,6 +119,7 @@ local function Harness(deferred, realTTS)
         chunk("OutLoud", addon)
     end
     Load("Core/Namespace.lua")
+    Load("Core/NPCInspection.lua")
     addon.VoiceMappings = {
         Families = { HUMAN = "HUMAN", UNDEAD = "UNDEAD" }, Models = { [100] = "UNDEAD" },
     }
@@ -131,9 +133,9 @@ local function Harness(deferred, realTTS)
         return resolve(self, unit, model)
     end
     addon.UI.TalkingHead = {
-        Show = function(self, unit, text)
+        Show = function(self, unit, text, displayTitle)
             self.shown = true
-            h.heads[#h.heads + 1] = { unit = unit, text = text }
+            h.heads[#h.heads + 1] = { unit = unit, text = text, title = displayTitle }
             h.flow[#h.flow + 1] = "head"
         end,
         SetLoading = function(self, loading)
@@ -487,11 +489,12 @@ Test("Single Voice covers manual, automatic, fallback, and Quest Log with indepe
 
         h:Click()
         Equal(h.nativeCalls[1].voiceID, 7, "Known NPC uses the narrator")
-        Equal(h.heads[1].unit, "questnpc", "Known NPC retains its portrait and name")
+        Equal(h.heads[1].unit, "player", "Single Voice keeps the existing player portrait")
+        Equal(h.heads[1].title, "Quest title 1", "Single Voice keeps the captured quest title")
         h.modelID = 999
         h:Click()
         Equal(h.nativeCalls[2].voiceID, 7)
-        Equal(h.heads[2].unit, "questnpc", "Unmapped NPC with a valid model remains the speaker")
+        Equal(h.heads[2].unit, "player", "Unmapped NPC keeps Single Voice player presentation")
         local session = h.addon.TTS.CurrentSession
         Equal(session.voiceID, 7)
         Equal(h.nativeCalls[2].text, mode == "full"
@@ -507,7 +510,7 @@ Test("Single Voice covers manual, automatic, fallback, and Quest Log with indepe
         timer:Fire()
         Equal(#h.nativeCalls, 3, "Automatic narration starts one session")
         Equal(h.nativeCalls[3].voiceID, 7)
-        Equal(h.heads[3].unit, "questnpc", "Automatic narration also keeps an unmapped NPC")
+        Equal(h.heads[3].unit, "player", "Automatic narration keeps Single Voice player presentation")
 
         h.modelID = 0
         h:Click()
@@ -743,7 +746,7 @@ Test("Deferred Blizzard UI installs once after its globals exist", function()
     Equal(#h.environment.QuestFrame.hooks.OnEvent, 1, "One event hook")
 end)
 
-Test("Late ownership resolves early terminal events and cleans up Talking Head", function()
+Test("Late ownership resolves early terminal events; repeats cannot stop playback", function()
     for _, mode in ipairs({ "full", "split" }) do
         for _, event in ipairs({ "FAILED", "FINISHED" }) do
             local h = Harness(false, true)
@@ -767,7 +770,56 @@ Test("Late ownership resolves early terminal events and cleans up Talking Head",
             Equal(#h.progress, 0, "Late bookmark cannot restart scrolling or sentence transitions")
             local stops = h.stops
             tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 101, mark)
-            Equal(h.stops, stops, "Late notifications never call global stop")
+            Equal(h.stops, stops, "Completed or already identified failed bookmarks cannot stop again")
+        end
+    end
+end)
+
+Test("QuestFrame and Quest Log replacements survive old prefetched bookmarks", function()
+    for _, source in ipairs({ "QuestFrame", "QuestLog" }) do
+        for _, mode in ipairs({ "full", "split" }) do
+            local h = Harness(false, true)
+            h.addon.Database:SetReadingMode(mode)
+            local narrator
+            if source == "QuestFrame" then
+                h.environment.QuestFrame:Show()
+                h:Panel("QuestFrameDetailPanel")
+                narrator = h.integration
+            else
+                narrator = h:CreateQuestLogNarrator()
+            end
+            h.texts.detail = "Old first. Old second."
+            narrator:SpeakCurrentText()
+            local tts, head = h.addon.TTS, h.addon.UI.TalkingHead
+            local old = tts.CurrentSession
+            local token = mode == "full" and "WHOLE" or "2"
+            if mode == "split" then
+                tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 100,
+                    "OUTLOUD:SPEECH:" .. old.id .. ":1")
+            end
+            h.texts.detail = "New narration."
+            narrator:SpeakCurrentText()
+            local replacement = tts.CurrentSession
+            local count, progress = #h.nativeCalls, #h.progress
+            local oldMark = "OUTLOUD:SPEECH:" .. old.id .. ":" .. token
+            tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 101, oldMark)
+            tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 101, oldMark)
+            Equal(h.stops, 1)
+            Equal(tts.CurrentSession, replacement)
+            Equal(#h.nativeCalls, count, "Old bookmarks cannot submit speech")
+            Equal(#h.progress, progress)
+            Equal(head.shown, true)
+            Equal(head.loading, true)
+            Equal(h.heads[#h.heads].text, "New narration.")
+            local newMark = "OUTLOUD:SPEECH:" .. replacement.id .. ":"
+                .. (mode == "full" and "WHOLE" or "1")
+            tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 102, newMark)
+            Equal(head.loading, false)
+            tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_FINISHED", 102)
+            Equal(replacement.finished, true)
+            Equal(head.shown, false)
+            tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 102, newMark)
+            Equal(h.stops, 1, "Completed quest narration cannot stop other TTS")
         end
     end
 end)

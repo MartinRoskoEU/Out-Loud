@@ -9,6 +9,7 @@
 Data\VoiceMappings.lua
 
 Core\Namespace.lua
+Core\NPCInspection.lua
 Core\VoiceSelection.lua
 Core\Database.lua
 Core\TTS.lua
@@ -21,5 +22,6 @@ UI\TalkingHead.xml
 UI\TalkingHead.lua
 UI\QuestIntegration.lua
 UI\QuestLogIntegration.lua
+UI\GossipIntegration.lua
 
 Core\Init.lua

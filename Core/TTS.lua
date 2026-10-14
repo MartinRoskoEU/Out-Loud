@@ -4,6 +4,7 @@ local TTS = {}
 OutLoud.TTS = TTS
 
 local MAX_PENDING_TERMINALS = 128
+local MAX_CANCELLED_TOKENS = 128
 
 TTS.ReadingModes = {
     FULL = "full",
@@ -139,6 +140,26 @@ function TTS:Initialize()
     self.Initialized = true
 end
 
+local function RememberCancelledSession(self, session)
+    local pendingTokens, count = {}, 0
+    local identifiedTokens = {}
+    for _, token in pairs(session.utterances) do identifiedTokens[token] = true end
+    if session.mode == self.ReadingModes.SPLIT then
+        for chunk in pairs(session.queued or {}) do
+            if not session.completedTokens[chunk] and not identifiedTokens[chunk]
+                and count < MAX_CANCELLED_TOKENS then
+                pendingTokens[chunk] = true
+                count = count + 1
+            end
+        end
+    elseif session.text and not session.completedTokens.WHOLE and not identifiedTokens.WHOLE then
+        pendingTokens.WHOLE = true
+    end
+    -- Keep only a bounded summary of the most recent cancellation, without text/buffers.
+    self.CancelledSession = next(pendingTokens)
+        and { id = session.id, pendingTokens = pendingTokens } or nil
+end
+
 function TTS:Stop()
     local session = self.CurrentSession
 
@@ -147,6 +168,7 @@ function TTS:Stop()
     end
 
     session.cancelled = true
+    RememberCancelledSession(self, session)
     self.CurrentSession = nil
     OutLoud:Debug("TTS stopping session:", session.id)
     StopPlayback(self)
@@ -298,13 +320,25 @@ function TTS:Speak(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgr
     return self:SpeakWholeText(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
 end
 
-function TTS:GetBookmarkSession(sessionID)
+function TTS:GetBookmarkSession(sessionID, token)
     local session = self.CurrentSession
     if session and session.id == sessionID then
         return session
     end
-    -- A stale notification is not proof of current audio. Never globally stop
-    -- newer narration or unrelated TTS because an old bookmark was delivered.
+    local cancelled = self.CancelledSession
+    if not cancelled or cancelled.id ~= sessionID or not cancelled.pendingTokens[token] then
+        return
+    end
+    -- Consume even an ignored active-session notification so a repeat while idle is harmless.
+    cancelled.pendingTokens[token] = nil
+    if session then
+        if not next(cancelled.pendingTokens) then self.CancelledSession = nil end
+        return
+    end
+    -- One follow-up for delayed unbookmarked playback, only while Out Loud is idle.
+    -- This is still a global native stop and can interrupt unrelated TTS.
+    self.CancelledSession = nil
+    StopPlayback(self)
 end
 
 local function RememberTerminal(session, event, utteranceID, status)
@@ -347,7 +381,7 @@ function TTS:OnBookmark(utteranceID, bookmark)
         return
     end
 
-    local session = self:GetBookmarkSession(sessionID)
+    local session = self:GetBookmarkSession(sessionID, chunk or token)
     if not session then return end
 
     if session.mode == self.ReadingModes.SPLIT then

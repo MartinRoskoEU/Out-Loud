@@ -192,28 +192,150 @@ for _, modes in ipairs({
     end)
 end
 
-Test("Stale bookmarks cannot stop newer playback or restart old prefetch", function()
-    local test = Harness()
-    test.tts:SpeakStreaming(text, 7)
-    test.tts:SpeakStreaming("New sentence. Another sentence.", 7)
-    local replacement = test.tts.CurrentSession
-    test:Bookmark(1, 101)
-    Equal(#test.calls, 2)
-    Equal(test.stops, 1, "Only the explicit replacement stops playback")
-    Equal(replacement.cancelled, nil)
-    Equal(test.tts.CurrentSession, replacement, "An old notification cannot cancel newer narration")
-    test.tts:SpeakWholeText("Fresh narration.", 7)
-    Equal(#test.calls, 3, "Ready to start again")
+Test("Stale prefetched bookmarks cannot stop or advance newer narration", function()
+    for _, method in ipairs({ "SpeakStreaming", "SpeakWholeText" }) do
+        local test = Harness()
+        test.tts:SpeakStreaming(text .. " Fourth sentence.", 7)
+        local old = test.tts.CurrentSession
+        test:Bookmark(1, 101)
+        test:Bookmark(2, 102)
+        Equal(#test.calls, 3, "Sentence three is already submitted while sentence two plays")
+        test.tts[method](test.tts, "New sentence. Another sentence.", 7)
+        local replacement = test.tts.CurrentSession
+        test:Bookmark(3, 103)
+        test:Bookmark(3, 103)
+        Equal(#test.calls, 4, "The delayed old bookmark cannot submit sentence four")
+        Equal(old.queued[4], nil)
+        Equal(test.stops, 1, "Only initial replacement stops playback")
+        Equal(replacement.cancelled, nil)
+        Equal(test.tts.CurrentSession, replacement)
+        test:Bookmark(4, 104)
+        Equal(replacement.playbackStarted, true, "New narration continues normally")
+        test:Event("FINISHED", 104)
+        if method == "SpeakStreaming" then
+            Equal(#test.calls, 5, "New session keeps one-sentence-ahead prefetch")
+            Equal(test.calls[5].spoken, "Another sentence.")
+            test:Bookmark(5, 105)
+            test:Event("FINISHED", 105)
+        end
+        Equal(replacement.finished, true)
+        Equal(test.tts.CurrentSession, nil)
+        test:Bookmark(3, 103)
+        Equal(test.stops, 1, "An ignored active-session bookmark cannot stop unrelated audio later")
+    end
 end)
 
 Test("Late bookmarks remain recognizable after Stop and cleanup", function()
+    for _, method in ipairs({ "SpeakStreaming", "SpeakWholeText" }) do
+        local test = Harness()
+        local ended = 0
+        test.tts[method](test.tts, text .. " Fourth sentence.", 7, function(reason)
+            Equal(reason, "cancelled")
+            ended = ended + 1
+        end)
+        local session = test.tts.CurrentSession
+        local pendingCall = 1
+        if method == "SpeakStreaming" then
+            test:Bookmark(1, 101)
+            test:Bookmark(2, 102)
+            pendingCall = 3
+        end
+        -- Talking Head's existing close handler calls this same Stop method.
+        Equal(test.tts:Stop(), true)
+        Equal(session.cancelled, true)
+        Equal(test.tts.CurrentSession, nil)
+        if method == "SpeakStreaming" then
+            test:Bookmark(2, 102)
+            Equal(test.stops, 1, "An already identified sentence is not delayed new playback")
+        end
+        test:Bookmark(pendingCall, 103)
+        Equal(test.stops, 2, "Delayed owned playback is stopped even while idle")
+        Equal(test.tts.CurrentSession, nil)
+        Equal(#test.calls, pendingCall, "Cancelled sessions cannot submit another sentence")
+        Equal(session.queued and session.queued[4], nil)
+        Equal(ended, 1, "Delayed playback cannot notify the cancelled presentation again")
+        test:Bookmark(pendingCall, 103)
+        Equal(test.stops, 2, "Repeated stale bookmarks cannot cause repeated native stops")
+        Equal(test.tts.CancelledSession, nil)
+    end
+end)
+
+Test("Cancelled bookmark protection validates submitted tokens and the most recent cancellation", function()
     local test = Harness()
-    test.tts:SpeakWholeText(text, 7)
-    test.tts:Stop()
+    test.tts:SpeakStreaming(text .. " Fourth sentence.", 7)
+    local cancelled = test.tts.CurrentSession
     test:Bookmark(1, 101)
-    Equal(test.stops, 1, "Late bookmarks do not stop unrelated playback")
+    test:Bookmark(2, 102)
+    test.tts:Stop()
+    for _, token in ipairs({ "4", "WHOLE" }) do
+        test:Event("BOOKMARK", 999, "OUTLOUD:SPEECH:" .. cancelled.id .. ":" .. token)
+    end
+    test:Event("BOOKMARK", 999, "OUTLOUD:SPEECH:999:3")
+    Equal(test.stops, 1, "Unsubmitted or wrong-mode tokens cannot authorize a global stop")
+    Equal(test.tts:SubmitChunk(cancelled, 4), false)
+    Equal(#test.calls, 3, "Cancellation prevents direct old-session submission too")
+    test.tts:SpeakWholeText("Most recent cancellation.", 8)
+    test.tts:Stop()
+    local recent = test.tts.CancelledSession
+    test:Bookmark(3, 103)
+    Equal(test.stops, 2, "Older cancellation summaries are deliberately forgotten")
+    Equal(test.tts.CancelledSession, recent)
+    test:Bookmark(4, 104)
+    Equal(test.stops, 3)
+end)
+
+Test("Completed session bookmarks never stop even with another cancelled session retained", function()
+    local test = Harness()
+    test.tts:SpeakWholeText("Cancelled generation.", 7)
+    local cancelled = test.tts.CurrentSession
+    test.tts:SpeakWholeText("Normal completion.", 8)
+    local completed = test.tts.CurrentSession
+    test:Bookmark(2, 102)
+    test:Event("FINISHED", 102)
+    Equal(completed.finished, true)
+    Equal(test.tts.CancelledSession.id, cancelled.id)
+    test:Bookmark(2, 102)
+    test:Bookmark(2, 102)
+    Equal(test.stops, 1, "Normal completion cannot authorize native stopping")
     Equal(test.tts.CurrentSession, nil)
-    Equal(#test.calls, 1)
+    test:Bookmark(1, 101)
+    Equal(test.stops, 2, "Only the cancelled session's pending token can stop while idle")
+end)
+
+Test("Cancelled-session summaries are bounded and do not retain speech or event buffers", function()
+    local test = Harness()
+    for _ = 1, 200 do
+        test.tts:SpeakWholeText("Pending.", 7)
+        test.tts:Stop()
+    end
+    local recent = test.tts.CancelledSession
+    Equal(recent.id, 200)
+    Equal(recent.text, nil)
+    Equal(recent.pendingTerminals, nil)
+    test:Bookmark(1, 101)
+    Equal(test.stops, 200)
+    test:Bookmark(200, 300)
+    Equal(test.stops, 201)
+    Equal(test.tts.CancelledSession, nil)
+
+    -- Stress only the summary bound using the real submission method, not native timing.
+    local many = Harness()
+    many.tts:SpeakStreaming(string.rep("Sentence. ", 256), 7)
+    local session = many.tts.CurrentSession
+    for chunk = 2, 256 do many.tts:SubmitChunk(session, chunk) end
+    many.tts:Stop()
+    local count = 0
+    for _ in pairs(many.tts.CancelledSession.pendingTokens) do count = count + 1 end
+    Equal(count, 128)
+    Equal(many.tts.CancelledSession.sentences, nil)
+
+    local identified = Harness()
+    identified.tts:SpeakStreaming(string.rep("Sentence. ", 129), 7)
+    for call = 1, 128 do identified:Bookmark(call, 100 + call) end
+    identified.tts:Stop()
+    Equal(identified.tts.CancelledSession.pendingTokens[129], true,
+        "Already identified utterances cannot use up the pending-token bound")
+    Equal(identified.tts.CancelledSession.pendingTokens[1], nil)
 end)
 
 Test("Duplicate bookmarks cannot submit a chunk twice", function()
@@ -402,7 +524,7 @@ Test("An identified intermediate failure cancels prefetched audio", function()
     Equal(test.stops, 1)
     test:Bookmark(3, 103)
     Equal(#test.calls, 3, "Late prefetched audio cannot continue the failed session")
-    Equal(test.stops, 1, "A late notification cannot justify another global stop")
+    Equal(test.stops, 2, "Delayed prefetched playback triggers the restored native stop")
 end)
 
 Test("Synchronous cancellation events cannot end the replacement session", function()
@@ -433,7 +555,7 @@ Test("Repeated sessions retain only the current session", function()
     Equal(test.tts.bookmarkInfo, nil)
     Equal(test.tts.utteranceInfo, nil)
     test:Bookmark(1, 101)
-    Equal(test.stops, 0, "Old notifications are ignored after cleanup")
+    Equal(test.stops, 0, "Completed sessions never authorize native stopping")
 end)
 
 Test("Display callback retains full original text while speech is sanitized and escaped", function()
@@ -533,7 +655,7 @@ Test("Sanitized streaming preserves original sentences, indexes, and one-ahead p
     Equal(ended, 1, "Do not wait for an empty sentence's missing bookmark")
     test:Bookmark(1, 101)
     Equal(#test.calls, 3, "Stale bookmarks cannot restart sanitized speech")
-    Equal(test.stops, 0, "Completed speech cannot cause a global stop")
+    Equal(test.stops, 0, "Late completed-session bookmarks cannot stop other speech")
     Equal(ended, 1)
 end)
 
@@ -629,11 +751,11 @@ Test("Early failures wait for ownership and then clean up once in both modes", f
         test:Event("FAILED", 101, 13)
         test:Bookmark(1, 101)
         Equal(#ended, 1)
-        Equal(test.stops, 1)
+        Equal(test.stops, 1, "Already identified failure bookmarks cannot cause repeated stops")
     end
 end)
 
-Test("Finish before whole bookmark completes without restarting display or newer narration", function()
+Test("Finish before whole bookmark completes without restarting display or stopping replacement", function()
     local test = Harness()
     local ended, started, updates = {}, 0, 0
     test.tts:SpeakWholeText(text, 7, function(reason)
@@ -653,7 +775,8 @@ Test("Finish before whole bookmark completes without restarting display or newer
     test:Bookmark(1, 101)
     test:Event("FINISHED", 101)
     test:Event("FAILED", 101, 13)
-    Equal(test.tts.CurrentSession, replacement, "Old events cannot complete or fail a replacement")
+    Equal(replacement.cancelled, nil)
+    Equal(test.tts.CurrentSession, replacement, "Completed old session cannot cancel the replacement")
     Equal(#test.calls, 2)
     Equal(test.stops, 0)
 end)
@@ -680,7 +803,7 @@ Test("Streaming recovers early finishes without duplicate progression or display
     Equal(ended[1], "finished")
     Equal(#ended, 1)
     Equal(updates, 0, "Already finished sentences cannot restart text flow")
-    Equal(test.stops, 0)
+    Equal(test.stops, 0, "Recovered normal completion cannot authorize native stopping")
 end)
 
 Test("Completed intermediate chunks reject late bookmarks and duplicate terminal events", function()
@@ -721,10 +844,11 @@ Test("Missing bookmarks preserve isolation and pending events do not cross sessi
         Equal(ended, 1, "Explicit replacement cleans up the pending narration")
         Equal(test.stops, 1)
         Equal(replacement.pendingTerminals[101], nil, "Do not retain old terminal events")
-        test:Bookmark(1, 101)
-        Equal(test.tts.CurrentSession, replacement)
         test:Bookmark(2, 101)
         Equal(test.tts.CurrentSession, replacement, "Even a reused ID cannot replay an old cached finish")
+        test:Bookmark(1, 101)
+        Equal(replacement.cancelled, nil)
+        Equal(test.tts.CurrentSession, replacement, "Old cancellation cannot affect the newer session")
         test.tts:Stop()
         Equal(test.tts:Stop(), false)
         Equal(test.stops, 2)

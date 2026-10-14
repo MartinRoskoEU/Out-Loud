@@ -178,9 +178,7 @@ function QuestIntegration:SpeakCurrentText()
         info = { reason = "model-unavailable" }
     else
         OutLoud:Debug("Loading questnpc model for:", tostring(UnitName("questnpc")))
-        -- Clear the previous NPC so an unfinished load cannot resolve its old model.
-        self.Model:ClearModel()
-        self.Model:SetUnit("questnpc")
+        OutLoud.NPCInspection:LoadUnit("questnpc")
 
         voiceID, info = OutLoud.VoiceSelection:Resolve("questnpc", self.Model)
         OutLoud:Debug("Voice resolution: NPC:", tostring(info.name),
@@ -261,8 +259,7 @@ function QuestIntegration:Initialize()
     self.Button = button
     self.ButtonGap = CreateFrame("Frame", nil, frame)
 
-    -- Match the user's working in-game lookup: an unparented, unhidden model.
-    self.Model = CreateFrame("PlayerModel")
+    self.Model = OutLoud.NPCInspection:GetModel()
 
     local function Refresh()
         local request = self.PendingAutoNarration

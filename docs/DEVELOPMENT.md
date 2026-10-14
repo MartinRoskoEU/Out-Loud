@@ -8,13 +8,15 @@ Implementation reference, testing commands, and in-game diagnostic helpers for
 Runtime services use singleton tables in the `OutLoud` namespace. `OutLoud.toc`
 loads generated data, Core services, UI components, and initialization in order.
 On addon load, initialization prepares the database, Options, Talking Head UI,
-and QuestFrame/Quest Log integrations. `Core/Narration.lua` shares presentation
-ownership and TTS callbacks between the two UI entry points.
+and QuestFrame/Quest Log/GossipFrame integrations. `Core/Narration.lua` shares
+presentation ownership and TTS callbacks between these UI entry points.
+`Core/NPCInspection.lua` owns one lazy, persistent inspection PlayerModel shared
+by quest and gossip narration, independently of Blizzard UI initialization.
 The speech event frame is created on the first valid speech request.
 VoiceSelection creates a separate voice-list update observer during addon loading.
 The addon initialization frame unregisters `ADDON_LOADED` and releases its handler
-after setup. Quest integrations retain their own deferred-load observers only
-until the required Blizzard UI globals exist.
+after setup. UI integrations each create at most one deferred-load observer;
+it unregisters and clears its handler when the required Blizzard UI globals exist.
 
 ## Voice data, resolution, and saved settings
 
@@ -51,6 +53,9 @@ The existing resolver paths remain unchanged. Presentation is selected separatel
 Single Voice QuestFrame narration always shows the player model and captured quest
 title. Multiple Voices keeps NPC model/name presentation and player fallback.
 Quest Log always shows the player model and captured quest title in both modes.
+Gossip Single Voice shows the player model and captured NPC name. Multiple Voices
+shows the NPC model/name when resolution succeeds; player fallback retains the
+captured NPC name while using the player's model and configured voice.
 
 Both assignment modes now use `VoiceSelection:IsVoiceAvailable(voiceID)` against
 the same cached API list. An unavailable family assignment returns
@@ -178,10 +183,22 @@ disables Blizzard's line-separator sound once.
 Both modes share cancellation and monotonically increasing session IDs. Starting
 valid new speech cancels the active session before submitting immediately.
 Completed/cancelled session tables are discarded, including their pending terminal
-event buffers. Old-session bookmarks are ignored. A late event is not evidence
-that stale audio is currently playing, so it no longer causes an emergency global
-stop that could interrupt newer narration or unrelated TTS. Explicit cancellation,
-replacement, and identified failures still use the API's global `StopSpeakingText()`.
+event buffers. `Stop()` explicitly records cancellation in `TTS.CancelledSession`:
+only the most recent cancellation is retained, with at most 128 submitted,
+unfinished tokens whose ownership bookmarks have not already been identified.
+The summary retains no speech text, session callbacks or terminal-event buffers.
+Normal completion records no cancellation, so completed-session bookmarks cannot
+authorize another native stop. Session-ID age alone is never used as cancellation evidence.
+
+Matching current-session bookmarks keep their existing ownership/progression rules.
+Stale bookmarks never call `Stop()` or affect an active newer narration. If a stale
+token matches the cancellation summary, it is consumed even while a new session
+is active, so a duplicate delivered later while idle cannot trigger stopping.
+While idle, the first eligible cancelled-session bookmark consumes the entire
+summary and requests one `StopPlayback()` call for delayed native playback.
+Repeated, already identified, unsubmitted, wrong-mode, completed-session and
+forgotten-session bookmarks are ignored. Cancelled sessions are never reactivated
+and cannot submit another sentence. There are no retries, timers or repeated stops.
 
 Only owned utterances can finish or fail a session. Native call errors are caught
 and printed in red regardless of the diagnostic flag. Bookmarks establish ownership. An
@@ -190,7 +207,7 @@ distinguished from unrelated TTS and does not change session state.
 Each session retains up to 128 recent terminal-event records by utterance ID,
 discarding the oldest records when full. An exact current-session ownership
 bookmark is required before a retained failure or finish can be applied.
-Duplicate events do not duplicate cleanup. A late finish is applied without
+Duplicate events within the current session do not duplicate cleanup. A late finish is applied without
 restarting playback notifications, scrolling, or text transitions. In split mode,
 a recovered intermediate finish submits only the next sentence; completed chunk
 and utterance guards prevent repeated progression or resurrection.
@@ -213,8 +230,24 @@ or start replacement narration to release the session explicitly.
 The local Blizzard TTS implementation notes that purged utterances do not emit
 `FINISHED`. No documented purge notification or per-utterance cancellation API
 is exposed. Arbitrary external purges therefore remain undetectable; Lua cleanup
-cannot guarantee native silence after a failed global stop. Ignoring stale events
-protects new presentation/session state but cannot silence a non-cooperative engine.
+cannot guarantee native silence after a failed global stop. The idle follow-up is
+still global and can interrupt unrelated TTS; the API cannot establish exclusive
+audio ownership or selectively cancel an old utterance. If old audio survives
+cancellation while newer narration is active, its stale bookmark is ignored to
+protect the new narration, and old audio may remain audible. Older cancellations
+are forgotten when another session is cancelled. Tokens beyond the summary limit,
+or delayed output after the one idle follow-up, receive no further stop requests.
+These limits preserve bounded state and avoid speculative synchronization.
+Early-event buffering, current-session ownership, completed-token guards,
+sanitization/escaping, Speech Rate and one-sentence-ahead prefetch remain unchanged.
+Standalone/mock checks cover idle cancellation, active replacements in TTS and
+Quest/Gossip integrations, normal completion, repeated bookmarks, submitted-token
+validation, summary eviction/bounds and unchanged progression. The user verified
+the earlier idle-stop protection in-game, and independently reported successful
+native ALPHA/BRAVO/CHARLIE cancellation/replacement with Pocket TTS at 2- and
+8-second delays. Those results do not verify this revised addon flow. Check
+Talking Head close with a prefetched sentence, rapid QuestFrame/Quest Log/Gossip
+replacement, new narration completion and both Full/Split modes in-game.
 Speech methods do not
 extract quest text, resolve voices, or control Talking Head behavior.
 
@@ -238,6 +271,7 @@ Run the mocked checks from the addon root with standalone Lua 5.1:
 lua Tests/VoiceSelection.lua
 lua Tests/TTS.lua
 lua Tests/QuestIntegration.lua
+lua Tests/GossipIntegration.lua
 ```
 
 Voice-selection tests exercise the generated mappings, real Options controls,
@@ -273,10 +307,19 @@ They also check player fallback and cancellation of pending automatic requests
 on manual click, close, disabling, quest/page replacement, or another TTS session,
 including a callback delivered after cancellation.
 
+Gossip-integration checks load the real generated mappings, inspection helper,
+voice resolver, database, narration controller, and TTS dispatcher. They cover
+manual-only visibility and updates, current greeting extraction, both voice modes,
+player fallback, deferred initialization in both UI orders, alternating quest/gossip
+model reuse, session replacement, sanitization/escaping/rate, stale bookmarks,
+owned completion, and failure cleanup. Talking Head and Blizzard frames are mocked;
+these checks do not establish event order, model readiness, layout or audible playback.
+
 ## Quest narration
 
 `OutLoud.UI.QuestIntegration` creates one unnamed `UIPanelButtonTemplate` button
-parented to `QuestFrame` and one reusable inspection `PlayerModel`. The model uses
+parented to `QuestFrame` and retains the shared inspection `PlayerModel` as
+`QuestIntegration.Model`. `OutLoud.NPCInspection:GetModel()` creates it once using
 `CreateFrame("PlayerModel")` without a parent or explicit `Hide()`, matching the
 user's working in-game inspection script. The button
 is 100 by 22, labelled **Out Loud**, and anchored with
@@ -520,6 +563,66 @@ its button; narration can continue.
 Button placement/visibility, player rendering and voice tokens, description-only
 audio in both modes, and replacement between QuestFrame and Quest Log narration
 require in-game verification.
+
+### Gossip narration
+
+`OutLoud.UI.GossipIntegration` adds one persistent 100 by 22
+`UIPanelButtonTemplate` button parented to the standard `GossipFrame`. Its anchor
+is `RIGHT` to `GossipFrame.GreetingPanel.GoodbyeButton`, `LEFT`, offset `-8, 0`.
+The native Goodbye button, scroll box, gossip options and quest lists are unchanged.
+The Out Loud button hides when the frame/greeting panel closes, Goodbye is hidden,
+or the current gossip text is empty, invalid or unavailable.
+
+The local Forever export loads `Shared/GossipFrameShared.lua` and
+`Mainline/GossipFrame.lua`/`.xml` through `Blizzard_UIPanels_Game.toc`.
+`GossipFrameSharedMixin:Update()` inserts `C_GossipInfo.GetText()` as the greeting
+before inserting separate quest and option entries. `GossipInfoDocumentation.lua`
+also declares this API. Out Loud reads only `C_GossipInfo.GetText()` at the click;
+it never extracts option labels, player responses or quest-list text.
+
+`Mainline/CustomGossipFrameBase.lua` routes `GOSSIP_SHOW` and `GOSSIP_CLOSED`
+through `CustomGossipFrameManager` to the standard frame's `HandleShow()` and
+`HandleHide()`. `HandleShow()` calls `Update()`. Out Loud installs a post-hook on
+the frame's `Update()` method, plus show/hide hooks on the frame, greeting panel
+and Goodbye. These hooks only refresh visibility, including page changes with
+the frame already open. There are no extra gossip-event registrations, polling,
+automatic narration triggers or model-loading timers. Initialization uses one
+guarded `ADDON_LOADED` observer if the native layout is absent, without force-loading UI.
+
+`Core/NPCInspection.lua` retains one unparented, unhidden PlayerModel.
+`GetModel()` creates it once; `LoadUnit(unit)` clears the previous model and calls
+`SetUnit(unit)` before returning it. Gossip can initialize and read before
+QuestFrame exists. QuestIntegration retains an alias to this same frame and uses
+the same load helper for `"questnpc"`; gossip uses `"npc"`. Talking Head's portrait
+model remains separate. A failed/unready model uses the existing player fallback,
+without guessing a previous model or delaying speech.
+
+On each manual click, gossip captures current text and the NPC name. Single Voice
+uses `VoiceSelection:ResolvePlayer()` to select the configured narrator without
+requiring NPC model/family/gender readiness; it displays the player model and NPC
+name. Multiple Voices loads `"npc"` and calls `VoiceSelection:Resolve("npc", model)`:
+FileDataID selects the generated Voice Family and `UnitSex("npc")` selects gender.
+It never calls `UnitRace("npc")`. Failed NPC resolution uses the player's model
+and configured voice while retaining the captured NPC name. A missing NPC name
+uses `Unknown`; an unusable player/narrator voice stops the request.
+
+`Narration:Speak()` receives the original text and captured title, so later gossip
+pages cannot change an active display. The existing TTS dispatcher handles Full
+and Split modes, rate, sanitization, XML escaping, ownership and replacement.
+Closing GossipFrame hides its button and prevents another read; as with QuestFrame,
+it does not stop an existing narration. Subsequent reads recapture identity/text
+and clear the shared inspection model before loading. Starting manual gossip
+speech also cancels a pending automatic quest request through the existing TTS
+`StartSession` hook. Opening or updating gossip never starts speech.
+
+Source inspection establishes the API/layout and routed lifecycle above. The user
+reported in-game `"npc"` availability, name, sex, `SetUnit("npc")` and a valid model
+ID for Daniel (`1011653`, `HUMAN`). Greeting retrieval, new button placement,
+actual hook/event order, immediate readiness when switching quest/gossip NPCs,
+portrait/title rendering, audio/bookmarks and scrolling remain unverified in-game.
+Check both voice modes and reading modes, empty greeting/options-only pages,
+repeated clicks, NPC/page changes, close/reopen, fallback, and Gossip-before-QuestFrame
+loading. Repeat with automatic quest narration enabled to confirm gossip stays manual.
 
 ### Talking Head visual animations
 
