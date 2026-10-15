@@ -17,7 +17,7 @@ and the loading spinner clears when owned playback begins.
 
 ## Current Features
 
-- Options UI with Single Voice and Race & Gender assignment modes, plus saved
+- Options UI with Single Voice and Multiple Voices assignment modes, plus saved
   Male and Female voice assignments for each Voice Family.
 - Generated mappings from NPC model FileDataIDs to Voice Families.
 - A runtime voice resolver that combines the model family with `UnitSex(unit)`
@@ -51,7 +51,7 @@ title for quest sources and the NPC name for gossip. An unset or unavailable nar
 with an error. Quest Log also shows the player model and quest title when using
 Multiple Voices.
 
-**Race & Gender** is the default and preserves the existing resolution and
+**Multiple Voices** is the default and preserves the existing resolution and
 player fallback. The resolver reads two independent properties of the NPC:
 
 ```text
@@ -75,7 +75,7 @@ For example, the two Skyborne model IDs in the Forever mapping both use
 
 ## Voice Configuration
 
-The **Voice Assignment** radio group selects **Single Voice** or **Race & Gender**.
+The **Voice Assignment** radio group selects **Single Voice** or **Multiple Voices**.
 The Narrator Voice selector and the existing family rows remain visible. Only the
 active mode's selectors can be used; the other controls appear disabled.
 Switching modes preserves both sets of assignments and leaves current playback running.
@@ -123,13 +123,12 @@ requests without restarting current playback.
 The mappings, saved voice configuration, voice resolver, Talking Head UI, TTS
 controller, manual QuestFrame, Quest Log and GossipFrame narration, and optional automatic
 QuestFrame narration are implemented.
-The dialogue text APIs and NPC voice resolver have been verified in-game by the
-user. The combined button, Talking Head, and speech flow still requires
-verification in WoW: Forever.
-The voice assignment modes and disabled controls have standalone/mock coverage;
-their native UI behavior and combined narration flow still require in-game verification.
-Gossip text retrieval and UI lifecycle were checked against the local Forever
-source; the new button and combined gossip playback require in-game verification.
+The user has manually tested the current snapshot-based Talking Head lifecycle
+successfully in WoW: Forever, including its intentional 0.5-second TTS submission
+delay. The dialogue text APIs and NPC voice resolver also have user-reported
+in-game verification. These checks do not establish exhaustive correctness across
+all Settings controls, NPC appearances, voices, or native TTS cancellation edge cases.
+Late Full-mode audio after cancellation remains under investigation.
 
 ## Architecture
 
@@ -138,7 +137,7 @@ The addon separates voice resolution, speech, and presentation:
 - Generated Voice Family mappings connect NPC visual models to configurable families.
 - `VoiceSelection` selects the configured narrator in Single Voice mode, or
   resolves an NPC model or player race to a family and uses `UnitSex` gender
-  detection in Race & Gender mode.
+  detection in Multiple Voices mode.
 - The TTS controller speaks supplied text with a supplied voice and applies the
   selected speech mode.
 - Talking Head provides the speaker portrait, dialogue display, and loading state.
@@ -149,5 +148,5 @@ The addon separates voice resolution, speech, and presentation:
 
 ## Development
 
-Implementation details, testing commands, and in-game diagnostic helpers are
-documented in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+Implementation details, the explicit-approval testing policy, and in-game
+diagnostic helpers are documented in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).

@@ -165,13 +165,17 @@ Keep the existing public speech responsibilities separated:
 
 Do not add artificial delays unless in-game testing proves they are necessary.
 
+Preserve the intentional, manually validated 0.5-second narration submission delay
+measured from Talking Head opening start. This belongs to Narration, not sentence
+streaming inside the TTS controller.
+
 ### Sentence streaming
 
 The tested streaming behavior is:
 
 - normalize whitespace
 - split on `.`, `!`, `?`
-- submit the first sentence immediately
+- submit the first sentence immediately when the TTS controller is called
 - use playback bookmarks to identify the active sentence
 - prefetch exactly one sentence ahead
 - do not queue all sentences at once
@@ -180,6 +184,7 @@ The tested streaming behavior is:
 - prevent duplicate sentence submission
 
 Preserve this behavior unless a change is explicitly requested and then verified in-game.
+The timer-free streaming path starts after Narration's intentional 0.5-second gate.
 
 ### Quest integration
 
@@ -190,8 +195,10 @@ Quest-specific code should own:
 - determining the speaking NPC/unit
 - deciding when Out Loud controls are visible
 - calling VoiceSelection
-- calling TTS
-- coordinating Talking Head state
+- passing captured narration data to the shared Narration coordinator
+
+The shared Narration coordinator owns request replacement, Talking Head lifecycle
+coordination, delayed TTS submission, and presentation callback ownership.
 
 Do not move quest-specific logic into generic TTS modules.
 
@@ -290,7 +297,7 @@ Do not replace known working paths with speculative alternatives.
 If a new Blizzard API is needed:
 
 1. inspect available source/documentation where possible
-2. create the smallest possible in-game test
+2. after explicit user approval, create the smallest possible in-game test
 3. verify it in WoW: Forever
 4. only then integrate it into production code
 
@@ -298,24 +305,21 @@ If a new Blizzard API is needed:
 
 ## Testing
 
-### Unit/mock tests
+### Approval and scope
 
-Add standalone Lua tests where they can meaningfully validate Out Loud logic.
+Do not automatically create or execute tests without explicit user approval.
+When tests have not been requested, prefer source inspection and logical code review.
 
-Good candidates include:
+Do not build simulated World of Warcraft environments as substitutes for the real
+client. Mocked Blizzard APIs, events, frames, animations, and native TTS are not
+authoritative runtime behavior. Actual WoW behavior must be verified in the game client.
 
-- sentence splitting
-- settings behavior
-- voice-family lookup
-- gender mapping logic
-- mode dispatch
-- session state
-- stale bookmark handling
-- duplicate-event protection
-- SavedVariables migration
-- load order assumptions that can be mocked
-
-Tests should exercise real production modules where practical rather than duplicate their logic.
+Isolated pure Lua logic tests are acceptable when explicitly requested and their
+scope is clear. Useful subjects include sentence splitting, settings normalization,
+voice-family lookup, mode dispatch, and controller predicates/state management.
+Exercise production modules where practical rather than duplicate their logic.
+Minimal supplied inputs or API doubles may isolate those checks; they must not
+simulate a client, native queue, or authoritative event ordering.
 
 ### What tests do not prove
 
@@ -345,7 +349,14 @@ Do not create elaborate test infrastructure for trivial changes.
 
 Do not add tests merely to inflate assertion counts.
 
-Test behavior that is likely to regress or that contains meaningful logic.
+When tests are explicitly requested, focus on meaningful logic likely to regress.
+
+### Diagnostic retention
+
+Keep `Core/TTSDiagnostics.lua` and its TOC entry unless the user explicitly approves
+their removal. Successful lifecycle testing does not make native TTS diagnostics
+obsolete. Historical temporary/removal wording in runtime comments is not permission
+to remove the recorder, diagnostics, or playback safeguards.
 
 ---
 
@@ -503,7 +514,8 @@ Preserve these unless explicitly changed:
 - Options provides Male and Female voice selection per Voice Family.
 - TTS supports both sentence streaming and whole-text reading.
 - Sentence streaming prefetches exactly one sentence ahead.
-- No artificial delay is used in the tested streaming path.
+- No artificial delay is used inside the tested sentence-streaming path.
+- Narration submits TTS 0.5 seconds after Talking Head opening begins; preserve this manually validated delay.
 - Talking Head is custom Out Loud UI using Blizzard-style assets.
 - Native SAPI registration remains manual.
 - WoW-dependent behavior requires in-game verification.

@@ -1,6 +1,6 @@
 # Development Guide
 
-Implementation reference, testing commands, and in-game diagnostic helpers for
+Implementation reference, approved logic checks, and in-game diagnostic helpers for
 [Out Loud](../README.md). See the main README for capabilities and project status.
 
 ## Runtime modules and initialization
@@ -34,11 +34,11 @@ it unregisters and clears its handler when the required Blizzard UI globals exis
 - Options derives its rows from unique `VoiceMappings.Families` values, including
   families without model entries. Display labels convert keys such as `NIGHT_ELF`
   into readable names such as "Night Elf".
-- In Race & Gender mode, `OutLoud.VoiceSelection:Resolve(unit, model)` accepts a PlayerModel already
+- In Multiple Voices mode, `OutLoud.VoiceSelection:Resolve(unit, model)` accepts a PlayerModel already
   loaded for that unit and returns the configured voice ID plus inspection
   details. Unknown models, unavailable models/units, unknown sex, and unset voices
   return no voice, with a reason in the details. The resolver does not start speech.
-- In Race & Gender mode, `OutLoud.VoiceSelection:ResolvePlayer()` uses the locale-stable token from
+- In Multiple Voices mode, `OutLoud.VoiceSelection:ResolvePlayer()` uses the locale-stable token from
   `UnitRace("player")`, checks its explicit mapping against `VoiceMappings.Families`,
   and combines that family with `UnitSex("player")` and the existing database.
   It requires no inspection model. Unknown race tokens, unknown sex, and unset
@@ -90,8 +90,8 @@ Unavailable choices display `Unavailable (voice ID)` and Settings no longer
 deletes unavailable family assignments when rebuilding rows.
 The native `SetEnabled`, `SetSelectionText`, `GenerateMenu`, and `CloseMenu`
 behavior was inspected in the local Forever export's setting controls, shared
-panel templates, and menu code. Mock checks do not verify their in-game styling
-or interaction; those still require a manual check.
+panel templates, and menu code. Native styling and interaction require a manual
+client check; no simulated Settings environment is maintained.
 
 NPC and player resolution share gender naming and configured-voice lookup;
 their model/race lookups and failure reasons remain distinct. Missing or malformed
@@ -108,12 +108,15 @@ Callers supply text and an already-resolved voice ID to the `OutLoud.TTS` single
 - `SpeakStreaming(text, voiceID)` normalizes whitespace and uses the tested
   `.`, `!`, `?` sentence splitter. The first sentence is submitted immediately;
   each valid sentence ownership bookmark submits only the next sentence. Duplicate bookmarks
-  cannot queue a sentence twice. No timers or artificial delays are used.
+  cannot queue a sentence twice. No timers or artificial delays are used inside
+  this controller path. Narration calls it after the intentional 0.5-second
+  Talking Head opening-start delay.
 - `SpeakWholeText(text, voiceID)` submits the sanitized complete text in one
   request, preceded by one ownership bookmark. It never splits or prefetches.
 - `Speak(text, voiceID)` reads the existing saved `readingMode` through the
   database: `"split"` selects streaming and `"full"` selects whole text. The
-  default is `"full"`.
+  default is `"full"`. Its optional seventh argument supplies a captured reading
+  mode instead; Narration uses it to preserve the accepted snapshot.
 - `Stop()` cancels active Out Loud speech. Calling it while idle leaves other
   TTS alone.
 
@@ -134,8 +137,9 @@ request or accepting a bookmark for that index. Completion follows the last
 nonempty speech sentence, including when a trailing separator-only sentence was
 skipped. Entirely empty sanitized input returns `false, "invalid-text"` before
 starting a session, preserving the existing invalid-input cancellation policy.
-The shared narration coordinator already hides Talking Head and clears loading
-when submission is rejected. No synthetic bookmarks or timers are added.
+The shared narration coordinator hides Talking Head and clears loading when
+submission is rejected. The controller adds no synthetic progress bookmarks or
+speech timers; Narration owns the intentional 0.5-second submission delay.
 
 The controller's existing event frame also handles `PLAYER_LOGOUT`, including
 UI teardown for `/reload`, by calling `Stop()` before the Lua state is discarded.
@@ -186,8 +190,12 @@ Sessions record `state` (`active`, `completed`, `failed`, `cancelled`), creation
 times, stop reason, and replacement ID. A request identity is reserved before
 replacement callbacks run, so narration requested by a callback cannot be
 overwritten by the enclosing request. A superseded Speak call returns
-`false, "session-replaced"`. The public speech methods and presentation callback
-signatures are unchanged. Full still uses one request and its `WHOLE` bookmark.
+`false, "session-replaced"`. TTS callbacks report session end, owned playback start
+and text progress. Narration guards those callbacks with request/presentation
+ownership. `Narration:Speak(unit, text, voiceID, displayTitle, diagnosticSource,
+modelFileID)` captures content; `TalkingHead:Show(speaker, text, readingMode,
+onOpening)` reports opening start with its transition identity. Opening completion
+only updates visual state. Full still uses one request and its `WHOLE` bookmark.
 
 Split's authoritative records live in `CurrentSession.sentenceStates[index]`:
 
@@ -223,8 +231,12 @@ no confirmed terminal become `closed-unresolved`, not implicitly completed.
 That logical label records their disposition at session end; later native evidence
 can resolve an attempt without reopening the retired session.
 Empty sanitized sentences remain indexed as `skipped` and never get attempts.
-Split's `queued`, `completedTokens`, and `completedUtterances` are compatibility
-views; controller decisions use sentence/attempt records.
+Split submission/progression decisions use sentence/attempt records. `queued` is
+a compatibility view with test readers and no production readers. It remains
+unchanged pending separate controller review. Completion tables are not uniformly
+obsolete: `completedUtterances` guards pending terminal retention, and Full mode
+uses `completedTokens` and `completedUtterances` to reject duplicate processing.
+Do not remove these safeguards as compatibility cleanup.
 
 Ended Split sessions release display/speech text, callbacks, bindings, and pending
 event buffers. `TTS.SplitHistory` keeps compact metadata for at most eight sessions
@@ -281,7 +293,8 @@ is consumed even during active replacement narration, preventing a later repeat
 from stopping audio while idle. Already identified, completed, unsubmitted,
 wrong-mode and forgotten tokens cannot authorize that follow-up. Older retained
 cancellations can also supply evidence for the guarded emergency recovery.
-No automatic retry, timeout, timer, or artificial delay is introduced.
+This native recovery policy adds no automatic retry, timeout, timer, or artificial
+delay. Narration's separate, intentional opening-start delay remains 0.5 seconds.
 
 Only owned utterances can finish or fail a session. Native call errors are caught
 and printed in red regardless of the diagnostic flag. Bookmarks establish ownership. An
@@ -338,16 +351,15 @@ after that follow-up, receive no further stop requests.
 These limits preserve bounded state and avoid speculative synchronization.
 Early-event buffering, current-session ownership, completed-token guards,
 sanitization/escaping, Speech Rate and one-sentence-ahead prefetch remain unchanged.
-Standalone/mock checks cover explicit sentence/attempt states, stop exposure,
-recovery eligibility predicates, deferred-event dispatch, ambiguous IDs, bounded
-duplicate evidence, rapid switches, callback reentrancy, recorder removal, idle cancellation, active replacements in TTS and
-Quest/Gossip integrations, normal completion, repeated bookmarks, submitted-token
-validation, summary eviction/bounds and unchanged progression. The user verified
+Retained controller checks exercise Lua state, recovery predicates, supplied event
+handling and bounded metadata. They do not verify native queue contents, event
+ordering, audible cancellation, or survival of newer speech. The user verified
 the earlier idle-stop protection in-game, and independently reported successful
 native ALPHA/BRAVO/CHARLIE cancellation/replacement with Pocket TTS at 2- and
-8-second delays. Those results do not verify this revised addon flow. Check
-Talking Head close with a prefetched sentence, rapid QuestFrame/Quest Log/Gossip
-replacement, new narration completion and both Full/Split modes in-game.
+8-second delays. The current snapshot-based Talking Head lifecycle has since been
+manually tested successfully by the user. Neither result establishes exhaustive
+native cancellation correctness; late Full-mode audio after cancellation remains
+under investigation.
 Speech methods do not
 extract quest text, resolve voices, or control Talking Head behavior.
 
@@ -359,16 +371,19 @@ using another STOP without resubmission; at 5.0 seconds the initial stop suffice
 Resubmission produced duplicates. These observations motivate the experiment;
 they do not establish queue-removal or newer-request-survival guarantees.
 
-The mock native layer has no queue or automatic stop acknowledgements. Removed
-scenario fixtures manufactured callbacks inside SpeakText/StopSpeakingText,
-terminal-before-bookmark playback recovery and completion followed by a submission exception.
-The observed trace checks only addon reactions. Deferral is checked directly with
-the Lua stop guard, not by asserting that native STOP emits a particular sequence.
-Remaining logic checks do not establish native event ordering or playback timing.
+The retained controller harness records calls and accepts explicit event inputs;
+it has no native queue or automatic stop acknowledgements. The observed trace
+checks only addon reactions. Deferral checks manipulate the Lua stop guard rather
+than asserting that native STOP emits a particular sequence. Exception/reentrancy
+inputs check defensive Lua behavior, not native event ordering or playback timing.
 
-### Temporary lifecycle diagnostics
+### Lifecycle diagnostics and retention
 
-`Core/TTSDiagnostics.lua` is a removable observer loaded immediately before TTS.
+`Core/TTSDiagnostics.lua` is a retained observer loaded immediately before TTS.
+Keep it and its TOC entry unless the user explicitly approves removal. Successful
+lifecycle testing does not retire the ongoing native TTS investigation. Historical
+temporary/removal wording in the runtime comment is not a removal instruction;
+that comment is left untouched by this documentation/test cleanup.
 It keeps the latest 200 timestamped events in a ring buffer, plus formats bounded
 current/retired state snapshots. The recorder uses IDs and decisions, never quest
 text or callbacks, and prints nothing. Times use the client `GetTime()` timebase.
@@ -391,9 +406,10 @@ from TTS session IDs: cancelling for replacement now happens before the new TTS
 session exists. Its outgoing `stopTrigger` identifies the incoming source; a
 presentation replacement therefore has no numeric `replacedBy` session ID at
 cancellation. Direct TTS replacements retain their existing session linkage.
-Recorder errors are isolated from playback decisions. Removing this file and its
-TOC entry leaves essential state tracking and cancellation functional; recorder
-removal is covered by standalone mocks.
+Recorder errors are isolated from playback decisions. Controller checks cover
+absence/failure of the optional observer as a dependency-boundary check, without
+authorizing its removal. Controller-owned evidence and native safeguards remain
+separate from diagnostic formatting and must be preserved.
 
 `_G.OutLoud.GetTTSReport()` returns the complete report as one string. In Toolbox
 Lua Console, run this standalone script to open its existing export dialog directly:
@@ -404,8 +420,8 @@ Toolbox.UI.ExportDialog:Show("Out Loud TTS report", _G.OutLoud.GetTTSReport(), 9
 
 Alternatively, `return _G.OutLoud.GetTTSReport()` returns one Console result for
 the Console's EXPORT TEXT action. Neither approach prints report lines to chat.
-The export call was checked against local Toolbox source; its live rendering is
-not established by the mocks.
+The export call was checked against local Toolbox source; its live rendering
+requires a client check.
 
 For manual verification after `/reload`, use Pocket TTS in Split with at least
 three sentences. Check normal sentence transitions and completion, close while B
@@ -421,11 +437,13 @@ proof that the newer request survived; capture unresolved cases without retrying
 Also verify Split-to-Full and Full-to-Split replacement, ordinary Full playback,
 and completion/cancel through QuestFrame, Quest Log and Gossip. Native stopping,
 silently purged requests, audible duplicates, event timing and UI rendering still
-require these WoW: Forever checks. No live TTS tests were run for this redesign.
+require targeted WoW: Forever checks. The user has manually validated the current
+snapshot lifecycle; exhaustive native TTS edge cases are not established.
 
 The user reported successful Pocket TTS and Microsoft Zira Desktop narration in
-both Full and Split modes before this hardening pass. The revised event recovery
-and voice-refresh paths have standalone/mock coverage, not new in-game verification.
+both Full and Split modes before this hardening pass. The current snapshot
+lifecycle also has user-reported manual WoW validation. Controller checks and
+source review do not establish every native recovery or voice-refresh case.
 For manual regression checks, use each voice in both reading modes through manual
 and automatic QuestFrame narration and Quest Log. Verify spinner removal, original
 displayed text, sentence transitions/prefetch, completion, close/cancel, rapid
@@ -437,62 +455,40 @@ or unregisters SAPI engines.
 
 ## Development testing
 
-Run the mocked checks from the addon root with standalone Lua 5.1:
+Do not create or execute tests automatically. Explicit user approval is required
+for either action. When tests have not been requested, use source inspection and
+logical code review. Do not build a simulated WoW environment as a substitute for
+the real client, or treat mocked APIs/events/frames/animations/native TTS as
+runtime evidence.
 
-```text
-lua Tests/VoiceSelection.lua
-lua Tests/TTS.lua
-lua Tests/QuestIntegration.lua
-lua Tests/GossipIntegration.lua
-lua Tests/TalkingHead.lua
-```
+Only two standalone Lua 5.1 files remain under `Tests/`:
 
-Voice-selection tests exercise the generated mappings, real Options controls,
-saved settings, and addon load order. Speech tests mock the native
-engine and playback events to check streaming, mode dispatch, cancellation,
-stale/duplicate bookmarks, completion, failures, and input validation. Model
-loading, rendering, and actual audio still require in-game checks.
-Reliability checks cover terminal-before-bookmark recovery, duplicate completion,
-missing-bookmark isolation, bounded early-event retention, stale/reentrant callback
-safety, global-stop cleanup, and control-byte removal. Voice tests cover event and
-Settings refresh, shared menu/runtime availability, unchanged saved selections,
-duplicate display names, and enumeration exceptions without playback polling.
-Sanitization checks cover separator replacement, punctuation and Unicode,
-literal XML/entity escaping, original display callbacks, single-request full
-mode, split indexes/prefetch, and empty speech cleanup. Quest checks exercise
-both QuestFrame and Quest Log speech paths with the real TTS dispatcher and a
-mock Talking Head. These are standalone/mock checks; actual speech, XML/entity
-handling by Forever's native TTS, bookmark timing, and sentence display/animation
-still require manual in-game verification.
-The Settings mocks model the modern checkbox, slider/stepper callbacks, and
-scrollbar percentages. The TOC is loaded in order, but Talking Head initialization
-is stubbed because standalone Lua cannot instantiate its XML template. XML paths
-and animation targets must be checked separately; these tests do not render it.
+- `Tests/VoiceSelection.lua` retains existing generated-catalog, resolver and
+  saved-value checks. Small supplied unit/model/voice inputs isolate selection
+  decisions. It loads no UI, creates no frames, delivers no events, and does not
+  verify model loading, native voice availability or WoW SavedVariables persistence.
+- `Tests/TTS.lua` checks splitting/sanitization, dispatch, controller predicates,
+  session state, stale/duplicate supplied events, bounded metadata, callback guards,
+  error handling and diagnostic isolation. Its API doubles record calls; they do
+  not model a native queue, STOP acknowledgements or authoritative event ordering.
+  A counted STOP call is not proof of audio interruption or newer-request survival.
 
-Quest-integration tests exercise the real UI module and voice resolver with mocked
-frames, units, model loading, Talking Head presentation, and the native speech
-engine. They cover visibility and transitions, exact state-specific text passed
-to Talking Head and TTS, call ordering, repeated clicks, deferred UI loading,
-unresolved inputs, and failed speech submission. Additional checks use the real
-TTS dispatcher to verify saved reading modes and session replacement. The mocks
-do not prove Forever's actual event ordering, UI rendering, or model readiness.
-The existing lifecycle/integration tests describe the previous end-of-opening
-submission gate and live-context invalidation. They have not been updated or run
-for the snapshot/0.5-second lifecycle revision and are not verification of that
-revision. Its verification is the source-level walkthrough below; no automated,
-simulation or in-game tests were executed and no test files were added. No mock
-suite proves native animation duration, completion ordering, model readiness or audio.
-They also check player fallback and cancellation of pending automatic requests
-on manual click, close, disabling, quest/page replacement, or another TTS session,
-including a callback delivered after cancellation.
+The retired lifecycle/integration suites and simulated Settings controls have been
+removed. No client simulation or automated test runner replaces them. These
+retained files are isolated Lua logic checks, not Talking Head or WoW integration
+verification, and have not been executed during this cleanup.
 
-Gossip-integration checks load the real generated mappings, inspection helper,
-voice resolver, database, narration controller, and TTS dispatcher. They cover
-manual-only visibility and updates, current greeting extraction, both voice modes,
-player fallback, deferred initialization in both UI orders, alternating quest/gossip
-model reuse, session replacement, sanitization/escaping/rate, stale bookmarks,
-owned completion, and failure cleanup. Talking Head and Blizzard frames are mocked;
-these checks do not establish event order, model readiness, layout or audible playback.
+If execution is explicitly approved, run only the requested file from the addon
+root, for example `lua Tests/VoiceSelection.lua` or `lua Tests/TTS.lua`. Do not add
+replacement tests to maintain counts or coverage. A logic-check result must be
+reported separately from actual in-game verification.
+
+Actual event delivery/ordering, frames/templates, animations, model readiness,
+Settings interaction, audio, bookmark timing and native cancellation require the
+real WoW: Forever client. The user has manually tested the current snapshot-based
+Talking Head lifecycle successfully, including the intentional 0.5-second TTS gate.
+That report does not establish exhaustive native TTS correctness; Full-mode late
+playback after cancellation remains an ongoing investigation.
 
 ## Quest narration
 
@@ -563,7 +559,8 @@ Quest narration passes an empty override if its title is missing, which displays
 request; loading, opening, sentence transitions and submission never reread quest UI state.
 The title getters were checked against the local Forever export's `QuestInfo.lua`,
 `QuestFrame.lua`, and `QuestLogDocumentation.lua`; their live results across
-Detail/Progress/Reward and Quest Log still require in-game verification.
+all Detail/Progress/Reward and Quest Log cases are not established by the general
+lifecycle report and need targeted client checks.
 The TTS dispatcher applies the existing reading mode; quest integration never
 selects streaming/full methods or splits sentences itself. `Narration:Speak()`
 returns presentation-request acceptance, not native submission success. Native
@@ -596,9 +593,9 @@ then starts closing, which immediately calls `TTS:Stop()`.
 The visual singleton owns `State`: `Closed`, `Opening`, `Opened`, `Closing`.
 `Narration.Narration` holds only the latest accepted request. Text, resolved voice,
 speaker name/faction/model asset, reading mode and source form its immutable
-content. Submission/timer bookkeeping is separate mutable request state. There
-is no `isCurrent` validator, `ValidatePending`, context revision or live quest/text
-comparison after acceptance. Request-time integration guards are unchanged.
+content. Submission/timer bookkeeping is separate mutable request state. Accepted
+content is not reread or revalidated against live quest/gossip UI during closing,
+opening or submission. Request-time integration guards remain required.
 
 1. Replacement establishes the new owner, invalidates/cancels the old submission
    timer, and stops current TTS immediately, before any exit animation work.
@@ -649,9 +646,10 @@ This avoids binding a delayed portrait to a different live `questnpc`/`npc`.
 The request carries the model ID already validated by voice resolution; it does
 not guess models or reload source NPCs. Missing/failed assets leave a cleared
 portrait and do not discard narration. Player narration retains the known
-`SetUnit("player")` path. Asset loading is source-informed, not verified in-game;
+`SetUnit("player")` path. The lifecycle has user-reported in-game validation, but
 a model FileDataID does not capture NPC display textures/equipment/customization.
-Verify snapshot portraits visually in Forever. The animation XML is unchanged.
+That report does not establish every NPC asset's appearance; check affected
+portraits visually in Forever. The animation XML is unchanged.
 
 Logical source walkthrough for this revision (not executed tests):
 
@@ -668,11 +666,12 @@ Logical source walkthrough for this revision (not executed tests):
 | Stale timer/animation/TTS callbacks | Submission token, transition identity, owner and phase guards prevent changes to newer presentation/speech. |
 | Repeated clicks on same quest | Each valid click creates a fresh owner and snapshot; only latest reopens/submits after the existing exit. |
 
-Actual timer cadence (including late callbacks), animation interruption/completion,
-snapshot portraits, speech during opening, spinner/text progress, audio/bookmarks
-and stale native prefetched playback still require manual WoW verification.
-Lifecycle sequencing does not establish native queue removal or newer-speech
-survival after an Emergency STOP.
+The user manually tested this snapshot-based lifecycle successfully in WoW,
+including the intentional 0.5-second submission delay. The table records source-level
+reasoning, not a claim that every scenario has an individual recorded client test.
+Native queue removal, stale playback, newer-speech survival after Emergency STOP,
+all timer/event edge cases and every NPC appearance are not exhaustively verified.
+Full-mode late audio after cancellation remains under investigation.
 
 ### Automatic QuestFrame narration
 
@@ -721,9 +720,9 @@ The shared TTS submission reads this setting for every full-text or sentence
 request. Changing it does not restart playback; an already prefetched sentence
 retains its submitted rate. No global Blizzard speech-rate setting is modified.
 
-Standalone/mock checks cover validation, saved-value reloads, slider step and
-formatters, reset, and Full/Split request parameters with unchanged bookmarks
-and lifecycle. In-game verification is still required for slider rendering,
+Retained Lua logic checks cover rate validation, saved-value handling and
+Full/Split submission parameters. They do not cover native slider behavior or
+WoW persistence. In-game verification is required for slider rendering,
 stepper/drag interaction, `/reload` persistence, and audible speed at -10, 0,
 and +10 in both reading modes. Check rate changes during split playback and
 confirm subsequent submissions adopt the new rate without interrupting audio.
@@ -765,15 +764,17 @@ frames, polling, or show/hide narration triggers; the timer only schedules the
 automatic path, without changing TTS generation or streaming.
 
 The manual button's visibility and placement are independent of these settings.
-Manual QuestFrame narration cancels any pending automatic request and starts
-immediately. Quest Log retains its explicit-click path, never consults the delay,
-and starts immediately.
+Manual QuestFrame narration cancels any pending automatic activation and captures
+its request immediately. Quest Log also captures on explicit click and skips the
+configurable activation delay. Both use the same closing/opening lifecycle and
+submit speech 0.5 seconds after opening begins.
 
 Check the default-off state, slider layout and disabled state, 0.5-second steps,
 seconds formatting, default delay and persistence after reload in-game. Verify
 all three automatic page reads with zero and nonzero delays in both modes,
 NPC/player fallback, cancellation on close/page change/disable/replacement, and
-immediate manual QuestFrame and Quest Log reads without a later duplicate.
+manual QuestFrame and Quest Log activation without the configurable delay or a
+later duplicate, preserving the separate 0.5-second submission gate.
 
 ### Quest Log player narration
 
@@ -834,9 +835,9 @@ Both reading modes, loading, sentence fades, paged scrolling, and close/cancel
 behavior remain in their existing services. Closing the Quest Log hides its button;
 accepted snapshots continue, including while closing/opening or awaiting submission.
 
-Button placement/visibility, player rendering and voice tokens, description-only
-audio in both modes, and replacement between QuestFrame and Quest Log narration
-require in-game verification.
+The general lifecycle validation does not establish every Quest Log button
+placement/visibility case, player appearance/voice token, or description-only read
+in both modes. Use targeted client checks for affected cases and cross-source replacement.
 
 ### Gossip narration
 
@@ -892,9 +893,10 @@ accepted snapshots. Opening or updating gossip never starts speech.
 
 Source inspection establishes the API/layout and routed lifecycle above. The user
 reported in-game `"npc"` availability, name, sex, `SetUnit("npc")` and a valid model
-ID for Daniel (`1011653`, `HUMAN`). Greeting retrieval, new button placement,
-actual hook/event order, immediate readiness when switching quest/gossip NPCs,
-portrait/title rendering, audio/bookmarks and scrolling remain unverified in-game.
+ID for Daniel (`1011653`, `HUMAN`). The successful lifecycle report does not
+exhaustively establish greeting retrieval, button placement, actual hook/event
+order, immediate readiness across NPC switches, portrait/title appearance,
+audio/bookmark edge cases or scrolling.
 Check both voice modes and reading modes, empty greeting/options-only pages,
 repeated clicks, NPC/page changes, close/reopen, fallback, and Gossip-before-QuestFrame
 loading. Repeat with automatic quest narration enabled to confirm gossip stays manual.
@@ -953,8 +955,9 @@ Conversation timers, sound playback, and model animation kits requiring
 `C_TalkingHead` are deliberately excluded.
 
 The spinner stays outside these animation groups and remains controlled by
-`SetLoading()`. The close button cancels speech immediately; opening/closing
-completion now also coordinates narration. In-game checks are required for native XML/template
+`SetLoading()`. The close button requests cancellation immediately. Opening start
+schedules submission; closing completion releases the latest pending request.
+Targeted in-game checks are required for native XML/template
 loading, fonts/atlases, model/backdrop opacity, movement, and interrupted reuse.
 
 ### Speaker model idle pose
@@ -979,9 +982,11 @@ the fixed viewport, so it does not move with the scroll content.
 
 Full mode prepares all text before the entrance and never replaces it during
 playback. Split mode prepares the first sentence using `TTS:SplitSentences()`.
-Quest integration forwards the fifth TTS callback only while its existing
-presentation ownership token is current. Sentence ownership notifications change
-the display; prefetch submissions do not. Later changes use native `SentenceOut`
+The shared Narration coordinator forwards the fifth TTS callback only while its
+request and presentation transition still own the display. Talking Head buffers
+the latest progress during Opening and applies it when opening completes.
+Sentence ownership notifications change the display; prefetch submissions do not.
+Later changes use native `SentenceOut`
 and `SentenceIn` alpha groups, each lasting 0.08 seconds. The new sentence replaces
 the old text between them and resets scrolling. These groups do not animate the
 portrait, name, background, close button, or spinner. A rapid new sentence replaces
@@ -1023,7 +1028,7 @@ still closes Talking Head when speech ends. Scrollbar placement/dragging,
 scrolling speed, text clipping, sentence
 transitions, and cancellation/reuse need visual in-game verification.
 
-Missing text produces no new Talking Head presentation or speech. In Race & Gender mode, NPC resolution
+Missing text produces no new Talking Head presentation or speech. In Multiple Voices mode, NPC resolution
 failure uses the player's configured voice and `"player"` Talking Head model/name;
 there is no generic default voice. If player resolution also fails, a red error
 is shown and no new narration starts. The inspection model is cleared before
@@ -1034,7 +1039,7 @@ item/no-NPC quests, both reading modes, and failed player resolution require
 in-game verification.
 
 For voice assignment verification in-game, open Options and switch between
-Single Voice and Race & Gender. Confirm the selected radio, disabled dropdowns
+Single Voice and Multiple Voices. Confirm the selected radio, disabled dropdowns
 and steppers, retained selections, and scroll layout after reopening and `/reload`.
 In Single Voice, try a mapped NPC, an unmapped NPC with a usable model, an item
 quest without an NPC, and Quest Log narration. Check portrait/name independently
@@ -1081,11 +1086,11 @@ reward dialogue. The existing resolver was also verified for Junior Apothecary
 Holland: model `959310`, family `UNDEAD`, `UnitSex = 2`, configured voice `1`.
 These user-reported checks establish the API choices, not the full integration.
 
-The source export remains the reference for frame names and hooks. The export's
-game/family file selection, actual panel/event behavior, template layout,
-immediate reusable PlayerModel readiness, Talking Head portrait/name/text rendering,
-spinner behavior, and actual audio in the combined click flow still require
-verification in WoW: Forever. No in-game execution was performed by the agent.
+The source export remains the reference for frame names and hooks. The current
+snapshot-based lifecycle has subsequently been manually tested successfully by
+the user in WoW: Forever. This is user-reported runtime evidence, not agent-run
+client testing. It does not establish every panel/template layout, immediate model
+readiness, NPC appearance, voice combination or native cancellation edge case.
 
 ### In-game QuestFrame checklist
 
@@ -1123,8 +1128,8 @@ Single Voice and confirm the player model plus current quest title for manual an
 automatic narration. Check Quest Log in both assignment modes. In Full and Split,
 verify the title through loading, sentence transitions, and completion; switch quest
 selection during playback and confirm it stays captured. Check long titles for
-clipping and missing titles for the generic `"Quest"` fallback. This presentation
-change was source-inspected only; no automated tests were added or run for it.
+clipping and missing titles for the generic `"Quest"` fallback. These remain
+targeted visual checks beyond the user's general successful lifecycle report.
 
 ### Inspect the current quest NPC
 
