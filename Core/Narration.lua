@@ -3,45 +3,158 @@ local AddonName, OutLoud = ...
 local Narration = {}
 OutLoud.Narration = Narration
 
--- Shared presentation callbacks; TTS continues to own speech sessions/bookmarks.
-function Narration:Speak(unit, text, voiceID, displayTitle)
-    local talkingHead = OutLoud.UI.TalkingHead
-    -- Replace ownership before Speak cancels the previous session.
-    local narration = {}
-    self.Narration = narration
-    OutLoud:Debug("Showing Talking Head.")
-    talkingHead:Show(unit, text, displayTitle)
-    talkingHead:SetLoading(true)
-    OutLoud:Debug("Talking Head visible:", talkingHead.Frame and talkingHead.Frame:IsShown() or false)
+local SUBMISSION_DELAY = 0.5
 
-    OutLoud:Debug("Submitting speech. Reading mode:", OutLoud.Database:GetReadingMode())
-    local ok, reason = OutLoud.TTS:Speak(text, voiceID, function(endReason)
-        if self.Narration == narration then
-            self.Narration = nil
-            OutLoud:Debug("Narration ended:", endReason, "Hiding Talking Head.")
-            talkingHead:FinishTextPlayback(endReason)
-            talkingHead:Hide()
-        end
-    end, function()
-        if self.Narration == narration then
-            talkingHead:SetLoading(false)
-        end
-    end, function(spokenText, chunk, offset)
-        if self.Narration == narration then
-            talkingHead:OnTextProgress(spokenText, chunk, offset)
-        end
+local function Record(event, request, detail)
+    local recorder = OutLoud.TTSDiagnostics
+    if recorder and request then
+        pcall(recorder.Record, recorder, event, nil, nil, nil, nil,
+            "request=" .. request.id .. " source=" .. request.source .. " " .. (detail or ""))
+    end
+end
+
+local function CancelSubmission(request, reason)
+    local submission = request and request.submission
+    if not submission then return end
+    request.submission = nil
+    if submission.timer then submission.timer:Cancel() end
+    Record("narration-submission-cancelled", request, reason or "manual")
+end
+
+local function CancelRequest(self, reason)
+    local request = self.Narration
+    self.Narration = nil
+    CancelSubmission(request, reason)
+    Record("narration-cancelled", request, reason or "manual")
+end
+
+local function OwnsPresentation(self, request, transition)
+    local talkingHead = OutLoud.UI.TalkingHead
+    return self.Narration == request and talkingHead.Transition == transition
+        and (talkingHead.State == "Opening" or talkingHead.State == "Opened")
+        and talkingHead.Frame:IsShown()
+end
+
+function Narration:Initialize()
+    if self.Initialized then return end
+    -- Stop must also cancel an opening/pending request with no TTS session yet.
+    OutLoud.TTS.onStopRequested = function(reason, _, diagnosticTrigger)
+        if self.InternalStop or (self.Submitting and self.Submitting == self.Narration and reason == "replaced") then return end
+        if not self.Narration then return end
+        -- The caller's Stop will do native cancellation after this notification.
+        self.InternalStop = true
+        local ok, message = pcall(self.Stop, self, reason, diagnosticTrigger or "TTS stop")
+        self.InternalStop = nil
+        if not ok then OutLoud:Error("Narration stop failed:", tostring(message)) end
+    end
+    self.Initialized = true
+end
+
+function Narration:OnClosing(reason, diagnosticTrigger)
+    CancelSubmission(self.Narration, reason)
+    if reason ~= "replaced" then
+        -- Also handle direct TalkingHead:Hide(), without reopening its request.
+        CancelRequest(self, reason)
+    end
+    if self.InternalStop then return end
+    self.InternalStop = true
+    OutLoud.TTS:Stop(reason, nil, diagnosticTrigger)
+    self.InternalStop = nil
+end
+
+function Narration:Stop(reason, diagnosticTrigger)
+    CancelRequest(self, reason)
+    local talkingHead = OutLoud.UI.TalkingHead
+    if talkingHead.State == "Closed" or talkingHead.State == "Closing" then
+        self:OnClosing(reason, diagnosticTrigger)
+    else
+        talkingHead:Hide(reason, diagnosticTrigger)
+    end
+end
+
+function Narration:OnClosed()
+    local talkingHead = OutLoud.UI.TalkingHead
+    local request = self.Narration
+    if not request or request.submitted or talkingHead.State ~= "Closed" then return end
+    local ok, reason = talkingHead:Show(request.speaker, request.text, request.readingMode, function(transition)
+        self:ScheduleSubmission(request, transition)
     end)
+    if not ok and self.Narration == request then
+        OutLoud:Error("Read stopped: Talking Head could not open:", tostring(reason))
+        self:Stop(reason)
+    end
+end
+
+function Narration:ScheduleSubmission(request, transition)
+    if not OwnsPresentation(self, request, transition) or request.submitted or request.submission then return end
+    Record("narration-opening-started", request)
+    local submission = {}
+    request.submission = submission
+    Record("narration-submission-scheduled", request, "delay=" .. SUBMISSION_DELAY)
+    submission.timer = C_Timer.NewTimer(SUBMISSION_DELAY, function()
+        if request.submission ~= submission then return end
+        request.submission = nil
+        self:Submit(request, transition)
+    end)
+end
+
+function Narration:Submit(request, transition)
+    local talkingHead = OutLoud.UI.TalkingHead
+    if not OwnsPresentation(self, request, transition) or request.submitted then return end
+    request.submitted = true
+    Record("narration-submitting", request)
+    local submitting = self.Submitting
+    self.Submitting = request
+    local ok, reason = OutLoud.TTS:Speak(request.text, request.voiceID, function(endReason)
+        if not OwnsPresentation(self, request, transition) then return end
+        self.Narration = nil
+        talkingHead:FinishTextPlayback(endReason)
+        talkingHead:Hide(endReason)
+    end, function()
+        if OwnsPresentation(self, request, transition) then talkingHead:SetLoading(false) end
+    end, function(spokenText, chunk, offset)
+        if OwnsPresentation(self, request, transition) then talkingHead:OnTextProgress(spokenText, chunk, offset) end
+    end, request.source, request.readingMode)
+    self.Submitting = submitting
     if not ok then
         OutLoud:Error("Read stopped: TTS rejected the request:", tostring(reason))
-        if self.Narration == narration then
-            self.Narration = nil
-            talkingHead:Hide()
-        end
-    elseif self.Narration == narration then
-        OutLoud:Debug("TTS submission accepted; waiting for playback events.")
-    else
-        OutLoud:Debug("TTS request ended during submission.")
+        if self.Narration == request then self:Stop(reason) end
     end
+end
 
-    return ok, reason
+-- Capture once; navigation cannot change an accepted narration's content.
+-- Returns acceptance, not the delayed native submission result.
+function Narration:Speak(unit, text, voiceID, displayTitle, diagnosticSource, modelFileID)
+    self:Initialize()
+    if not unit or not UnitExists(unit) then return false, "unit-unavailable" end
+    local speaker = {
+        unit = unit, name = UnitName(unit) or "Unknown", faction = UnitFactionGroup(unit),
+        modelFileID = modelFileID,
+    }
+    if displayTitle ~= nil then
+        speaker.name = type(displayTitle) == "string" and displayTitle:find("%S") and displayTitle or "Quest"
+    end
+    self.RequestID = (self.RequestID or 0) + 1
+    local request = {
+        id = self.RequestID, speaker = speaker, text = text, voiceID = voiceID,
+        source = type(diagnosticSource) == "string" and diagnosticSource or "Narration",
+        readingMode = OutLoud.Database:GetReadingMode(),
+    }
+    -- Change ownership before native STOP can synchronously notify the outgoing session.
+    local previous = self.Narration
+    self.Narration = request
+    CancelSubmission(previous, "replaced")
+    Record("narration-cancelled", previous, "replaced")
+    Record("narration-requested", request, "unit=" .. unit .. " model=" .. tostring(modelFileID or "-"))
+    local talkingHead = OutLoud.UI.TalkingHead
+    self:OnClosing("replaced", "replacement:" .. request.source)
+    if self.Narration ~= request then return true end
+    talkingHead:Initialize()
+    if self.Narration ~= request then return true end
+    if talkingHead.State == "Closed" then
+        self:OnClosed()
+    else
+        talkingHead:Hide("replaced", "replacement:" .. request.source)
+    end
+    return true
 end

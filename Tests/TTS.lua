@@ -1062,7 +1062,7 @@ Test("Emergency eligibility depends on recorded ownership and ambiguity", functi
     test:Bookmark(1, 101)
     test:Event("FINISHED", 101)
     test:Bookmark(2, 102)
-    old.unidentifiedPlayback[901], old.unidentifiedPlaybackCount = { event = "STARTED" }, 1
+    test:Event("STARTED", 901)
     test.tts:SpeakStreaming("New.", 8)
     local current = test.tts.CurrentSession
     local attempt = old.sentenceStates[3].attempts[1]
@@ -1076,14 +1076,15 @@ Test("Emergency eligibility depends on recorded ownership and ambiguity", functi
     end
     Equal(current.unidentifiedPlaybackCount, 1, "Replacement STOP cannot clear unidentified evidence")
     Equal(Eligible(), false)
-    current.unidentifiedPlayback, current.unidentifiedPlaybackCount = {}, 0
+    test:Event("FINISHED", 901)
+    Equal(current.unidentifiedPlaybackCount, 0, "An observed terminal resolves the unidentified blocker")
     Equal(Eligible(), true)
     current.ownershipEvidenceObserved = true
     Equal(Eligible(), false)
     current.ownershipEvidenceObserved = nil
-    current.unidentifiedPlayback[901], current.unidentifiedPlaybackCount = { event = "STARTED" }, 1
+    test:Event("STARTED", 902)
     Equal(Eligible(), false)
-    current.unidentifiedPlayback, current.unidentifiedPlaybackCount = {}, 0
+    test:Event("FAILED", 902, 13)
     current.recoveryEvidenceLost = true
     Equal(Eligible(), false)
     current.recoveryEvidenceLost = nil
@@ -1104,6 +1105,122 @@ Test("Emergency eligibility depends on recorded ownership and ambiguity", functi
     attempt.utterances[103].terminal = nil
     Equal(test.tts:GetSplitRecoveryEligibility(attempt, 103, false).emergencyStopEligible, false)
     Equal(test.stops, 1, "Eligibility inspection does not issue native calls")
+end)
+
+Test("Unidentified terminals stop blocking without losing late ownership correlation", function()
+    for _, terminal in ipairs({ "FINISHED", "FAILED" }) do
+        local test = Harness()
+        test.tts:SpeakStreaming("Only.", 7)
+        local session = test.tts.CurrentSession
+        test.clock = 1
+        test:Event("STARTED", 901)
+        test.clock = 2
+        test:Event("BOOKMARK", 901, "Start")
+        Equal(session.unidentifiedPlaybackCount, 1)
+        test.clock = 3
+        test:Event(terminal, 901, terminal == "FAILED" and 13 or nil)
+        Equal(session.unidentifiedPlaybackCount, 0)
+        Equal(test.tts.CurrentSession, session, "An unowned terminal cannot end narration")
+        local evidence = session.unidentifiedPlayback[901]
+        Equal(evidence.utteranceID, 901)
+        Equal(evidence.firstEvent, "VOICE_CHAT_TTS_PLAYBACK_STARTED")
+        Equal(evidence.firstAt, 1)
+        Equal(evidence.lastEvent, "VOICE_CHAT_TTS_PLAYBACK_" .. terminal)
+        Equal(evidence.lastAt, 3)
+        Equal(evidence.terminal, terminal == "FINISHED" and "finished" or "failed")
+        Equal(evidence.terminalAt, 3)
+        test.clock = 4
+        test:Event("STARTED", 901)
+        test:Event(terminal, 901)
+        Equal(session.unidentifiedPlaybackCount, 0, "Delayed/duplicate events do not reopen a retained terminal")
+        test:Bookmark(1, 901)
+        Equal(session.state, terminal == "FINISHED" and "completed" or "failed")
+        Equal(session.sentenceStates[1].attempts[1].utterances[901].terminal, evidence.terminal)
+        Equal(session.sentenceStates[1].attempts[1].utterances[901].startedAt, 1)
+        Equal(#test.calls, 1, "Bookkeeping never resubmits")
+    end
+end)
+
+Test("Idle diagnostics retain terminal records and distinguish blockers and cancellation source", function()
+    local test = Harness()
+    test.tts:SpeakStreaming(text, 7, nil, nil, nil, "Quest")
+    test:Bookmark(1, 101)
+    test:Bookmark(2, 102)
+    test.clock = 1
+    test:Event("STARTED", 901)
+    test:Event("FINISHED", 901)
+    test:Event("FAILED", 903, 13)
+    test.clock = 2
+    test:Event("STARTED", 902)
+    test:Event("BOOKMARK", 902, "Start")
+    local old = test.tts.CurrentSession
+    test.tts:SpeakStreaming("New.", 8, nil, nil, nil, "Gossip")
+    local current = test.tts.CurrentSession
+    Equal(current.unidentifiedPlaybackCount, 1, "Replacement carries only unresolved blockers in the count")
+    Equal(current.unidentifiedPlayback[901].terminal, "finished")
+    Equal(current.unidentifiedPlayback[903].firstEvent, "VOICE_CHAT_TTS_PLAYBACK_FAILED")
+    test:Bookmark(3, 103)
+    Equal(test.stops, 1, "Unresolved evidence blocks the emergency call")
+    local report = test.addon.GetTTSReport()
+    assert(report:find("emergency-stop-blocker", 1, true))
+    assert(report:find("utterance=902 state=unresolved", 1, true))
+    assert(report:find("observed-source=Quest source=Gossip", 1, true))
+    assert(report:find("trigger=replacement:Gossip", 1, true))
+    test:Event("FINISHED", 902)
+    Equal(current.unidentifiedPlaybackCount, 0)
+    test:Bookmark(3, 103)
+    Equal(test.stops, 1, "Resolving evidence does not retry a previously skipped stale bookmark")
+    test.tts:Stop(nil, nil, "Talking Head close")
+    local idle = test.tts.IdleSplitEvents
+    Equal(idle.unidentifiedPlaybackCount, 0)
+    Equal(idle.unidentifiedPlayback[902].terminal, "finished")
+    report = test.addon.GetTTSReport()
+    assert(report:find("Current: idle", 1, true))
+    assert(report:find("Unidentified playback: unresolved=0", 1, true))
+    assert(report:find("utterance=902 first=VOICE_CHAT_TTS_PLAYBACK_STARTED at=2", 1, true))
+    assert(report:find("terminal=finished at=2", 1, true))
+    assert(report:find("source=Gossip trigger=Talking Head close", 1, true))
+    Equal(old.source, "Quest")
+    Equal(current.stopReason, "manual", "Diagnostic trigger preserves the cancellation reason")
+end)
+
+Test("Unidentified retention evicts terminal metadata before losing unresolved evidence", function()
+    local test = Harness()
+    test.tts:SpeakStreaming("Only.", 7)
+    local session = test.tts.CurrentSession
+    for id = 1000, 1127 do test:Event("STARTED", id) end
+    Equal(session.unidentifiedPlaybackCount, 128)
+    test:Event("FINISHED", 2000)
+    Equal(session.recoveryEvidenceLost, nil, "Discarding terminal metadata does not lose unresolved evidence")
+    test:Event("FINISHED", 1000)
+    Equal(session.unidentifiedPlaybackCount, 127)
+    test:Event("STARTED", 2001)
+    Equal(session.unidentifiedPlayback[1000], nil, "Prefer eviction of resolved metadata")
+    Equal(session.unidentifiedPlaybackCount, 128)
+    test:Event("STARTED", 2002)
+    Equal(session.unidentifiedPlaybackCount, 128)
+    Equal(session.recoveryEvidenceLost, true)
+    local retained = 0
+    for _ in pairs(session.unidentifiedPlayback) do retained = retained + 1 end
+    Equal(retained, 128)
+end)
+
+Test("Carried unidentified terminals update metadata during Full without changing its playback", function()
+    local test = Harness()
+    test.tts:SpeakStreaming("Old.", 7)
+    test:Event("STARTED", 901)
+    test.tts:SpeakWholeText("Full.", 8)
+    local full = test.tts.CurrentSession
+    Equal(full.unidentifiedPlaybackCount, 1)
+    test:Event("FINISHED", 901)
+    Equal(full.unidentifiedPlaybackCount, 0)
+    Equal(full.unidentifiedPlayback[901].terminal, "finished")
+    Equal(test.tts.CurrentSession, full, "Unowned terminals still cannot complete Full narration")
+    test:Event("STARTED", 902)
+    Equal(full.unidentifiedPlayback[902], nil, "Full does not begin collecting unrelated IDs")
+    test.tts:SpeakStreaming("New.", 7)
+    Equal(test.tts.CurrentSession.unidentifiedPlaybackCount, 0)
+    Equal(#test.calls, 3, "Bookkeeping does not change submission counts")
 end)
 
 Test("Emergency event deferral protects Lua state until the stop guard is released", function()
@@ -1327,6 +1444,8 @@ Test("Diagnostics return one bounded text-free report and do not drive playback"
     end
     Equal(#session.pendingStartOrder, 128)
     Equal(#session.pendingTerminalOrder, 128)
+    Equal(session.unidentifiedPlaybackCount, 0, "Completed unidentified IDs cannot accumulate active blockers")
+    Equal(session.recoveryEvidenceLost, nil, "Evicting resolved records does not weaken recovery evidence")
     Equal(test.tts.CurrentSession, session, "Unowned events cannot authorize retry or completion")
     Equal(#test.calls, 1)
     Equal(test.stops, 0)

@@ -78,7 +78,7 @@ function GossipIntegration:SpeakCurrentText()
         return
     end
 
-    return OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitle)
+    return OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitle, "Gossip", info.modelFileID)
 end
 
 function GossipIntegration:Initialize()

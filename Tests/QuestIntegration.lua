@@ -133,18 +133,37 @@ local function Harness(deferred, realTTS)
         return resolve(self, unit, model)
     end
     addon.UI.TalkingHead = {
-        Show = function(self, unit, text, displayTitle)
+        -- Integration fixtures finish animations immediately; Tests/TalkingHead.lua
+        -- drives the production UI's animation callbacks explicitly.
+        State = "Closed", Initialize = function() end,
+        Show = function(self, unit, text, displayTitle, onOpened)
             self.shown = true
+            self.State = "Opening"
             h.heads[#h.heads + 1] = { unit = unit, text = text, title = displayTitle }
             h.flow[#h.flow + 1] = "head"
+            self:SetLoading(true)
+            self.opened = function()
+                self.State = "Opened"
+                onOpened()
+            end
+            if not h.deferAnimations then self.opened() end
+            return true
         end,
         SetLoading = function(self, loading)
             self.loading = loading
             h.flow[#h.flow + 1] = loading and "loading" or "idle"
         end,
-        Hide = function(self)
+        Hide = function(self, reason, trigger)
+            if self.State == "Closed" or self.State == "Closing" then return end
+            self.State = "Closing"
+            addon.Narration:OnClosing(reason, trigger)
             self.shown, self.loading = false, false
             h.flow[#h.flow + 1] = "hide"
+            self.closed = function()
+                self.State = "Closed"
+                addon.Narration:OnClosed()
+            end
+            if not h.deferAnimations then self.closed() end
         end,
         FinishTextPlayback = function(_, reason) h.endReason = reason end,
         OnTextProgress = function(_, text, chunk, offset)
@@ -169,6 +188,7 @@ local function Harness(deferred, realTTS)
         speak = addon.TTS.Speak
     else
         addon.TTS = { ReadingModes = { FULL = "full", SPLIT = "split" }, StartSession = function() end,
+            Stop = function() return false end,
             GetVoices = function() return h.voices end }
         speak = function() return true end
     end
@@ -177,10 +197,10 @@ local function Harness(deferred, realTTS)
     addon.Database:SetVoice("HUMAN", 3, 7)
     addon.Database:SetVoice("UNDEAD", 2, 0)
     addon.Database:SetVoice("UNDEAD", 3, 7)
-    function addon.TTS:Speak(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
+    function addon.TTS:Speak(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
         table.insert(h.speech, { text = text, voiceID = voiceID })
         h.flow[#h.flow + 1] = "speak"
-        return speak(self, text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
+        return speak(self, text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
     end
     Load("Core/Narration.lua")
     Load("UI/QuestIntegration.lua")
@@ -293,9 +313,8 @@ Test("Click uses each panel's current text unchanged and real resolver", functio
         Equal(h.heads[index].unit, "questnpc", "Talking Head speaker")
         Equal(h.heads[index].text, h.texts[source], "Talking Head receives exact dialogue")
         Equal(h.addon.UI.TalkingHead.loading, true, "Loading starts on submission")
-        local offset = (index - 1) * 5
-        Equal(table.concat(h.flow, ",", offset + 1, offset + 5),
-            "model,resolve,head,loading,speak", "Resolve before UI, loading before speech")
+        Equal(table.concat(h.flow, ",", #h.flow - 2, #h.flow),
+            "head,loading,speak", "Opening completes before speech")
     end
     h.texts.reward = "Updated reward text."
     h.sex = 3
@@ -442,7 +461,7 @@ Test("NPC failures use the player; failed player resolution does not start speec
     Equal(#h.heads, count, "Failed player resolution leaves presentation alone")
 end)
 
-Test("Real TTS dispatcher honors reading modes and owns replacement", function()
+Test("Real TTS dispatcher honors reading modes after presentation replacement", function()
     local h = Harness(false, true)
     local tts = h.addon.TTS
     h.environment.QuestFrame:Show()
@@ -459,7 +478,7 @@ Test("Real TTS dispatcher honors reading modes and owns replacement", function()
     Equal(tts.CurrentSession.mode, "split", "Existing saved split setting")
     Equal(h.nativeCalls[2].text, "Offer text.", "TTS performs splitting")
     Equal(h.heads[2].text, h.texts.detail, "Talking Head keeps full original text")
-    Equal(h.stops, 1, "TTS alone replaces the previous session")
+    Equal(h.stops, 1, "Closing stops the previous session")
     h.environment.QuestFrame:Hide()
     Equal(h.stops, 1, "QuestFrame close does not stop narration")
     Equal(h.addon.UI.TalkingHead.shown, true, "QuestFrame close leaves presentation visible")
@@ -598,6 +617,7 @@ Test("QuestFrame and Quest Log sanitize speech while keeping original Talking He
             Equal(h.heads[1].text, original, "Talking Head receives unchanged original text")
             Equal(#h.nativeCalls, 1, "Both modes start with one request")
             local tts = h.addon.TTS
+            Equal(tts.CurrentSession.source, source == "QuestFrame" and "Quest" or "Quest Log")
             local mark = "OUTLOUD:SPEECH:" .. tts.CurrentSession.id .. ":"
             local token = mode == "full" and "WHOLE" or "1"
             Equal(h.nativeCalls[1].text, mode == "full"
@@ -639,8 +659,8 @@ Test("Empty sanitized quest narration clears Talking Head and loading in both so
                 narrator = h:CreateQuestLogNarrator()
             end
             local ok, reason = narrator:SpeakCurrentText()
-            Equal(ok, false)
-            Equal(reason, "invalid-text")
+            Equal(ok, true, "Presentation request accepted; TTS rejection is asynchronous")
+            Equal(reason, nil)
             Equal(#h.nativeCalls, 0, "Empty speech never reaches the native engine")
             Equal(h.addon.TTS.CurrentSession, nil)
             Equal(h.addon.Narration.Narration, nil, "Release presentation ownership")
@@ -700,8 +720,8 @@ Test("Failed speech submission hides Talking Head and clears loading", function(
     h:Panel("QuestFrameDetailPanel")
     h.failSpeech = true
     local ok, reason = h.integration:SpeakCurrentText()
-    Equal(ok, false, "Preserve TTS submission result")
-    Equal(reason, "speech-failed", "Preserve TTS failure reason")
+    Equal(ok, true, "Presentation request acceptance precedes native submission")
+    Equal(reason, nil, "Submission failures are reported asynchronously")
     Equal(#h.heads, 1, "Presentation opened before attempted speech")
     Equal(h.addon.UI.TalkingHead.shown, false, "Do not leave failed narration visible")
     Equal(h.addon.UI.TalkingHead.loading, false, "Do not leave failed narration loading")
@@ -780,6 +800,55 @@ Test("QuestFrame and Quest Log replacement state is isolated from old ownership"
             Equal(h.stops, expectedStops, "Completed bookmark does not request another stop")
         end
     end
+end)
+
+Test("Pending quest context is invalidated during animations without stopping active narration", function()
+    for _, change in ipairs({ "hide", "quest", "text", "speaker" }) do
+        local h = Harness(false, true)
+        h.deferAnimations = true
+        h.environment.QuestFrame:Show()
+        h:Panel("QuestFrameDetailPanel")
+        h:Click()
+        Equal(#h.nativeCalls, 0)
+        local head = h.addon.UI.TalkingHead
+        if change == "hide" then h.environment.QuestFrame:Hide()
+        elseif change == "quest" then h.questID = 2
+        elseif change == "text" then h.texts.detail = "Changed."
+        else h.environment.UnitName = function() return "Different NPC" end end
+        if change == "hide" then Equal(h.addon.Narration.Narration, nil) end
+        head.opened()
+        Equal(h.addon.Narration.Narration, nil)
+        Equal(#h.nativeCalls, 0, "Changed source must not submit captured speech")
+    end
+    local h = Harness(false, true)
+    h.deferAnimations = true
+    local log = h:CreateQuestLogNarrator()
+    log:SpeakCurrentText()
+    h.questID = 2
+    h.addon.UI.TalkingHead.opened()
+    Equal(#h.nativeCalls, 0, "Changed quest-log selection invalidates an opening request")
+end)
+
+Test("Automatic requests stay cancellable after their timer and before speech", function()
+    local h = Harness(false, true)
+    h.deferAnimations = true
+    h.environment.QuestFrame:Show()
+    h:Panel("QuestFrameDetailPanel")
+    h.addon.Database:SetAutoNarrateQuests(true)
+    h.environment.QuestFrame:Fire("OnEvent", "QUEST_DETAIL")
+    h.timers[1]:Fire()
+    Equal(#h.nativeCalls, 0)
+    h.addon.Database:SetAutoNarrateQuests(false)
+    Equal(h.addon.Narration.Narration, nil)
+    h.addon.UI.TalkingHead.opened()
+    Equal(#h.nativeCalls, 0)
+    h.addon.Database:SetAutoNarrateQuests(true)
+    h.environment.QuestFrame:Fire("OnEvent", "QUEST_DETAIL")
+    local timer = h.timers[#h.timers]
+    h.addon.Narration:Stop(nil, "Talking Head close")
+    Equal(timer.cancelled, true, "Manual close also cancels the scheduled automatic request")
+    timer:Fire()
+    Equal(#h.nativeCalls, 0)
 end)
 
 print("QuestIntegration: " .. passed .. " mocked checks passed")

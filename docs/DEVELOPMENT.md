@@ -252,12 +252,20 @@ no ownership evidence at all and no previous emergency recovery attempt. Full
 sources and active Full sessions keep their existing playback policy.
 
 STARTED alone is not ownership. Its native ID is correlated when a matching
-bookmark arrives. Another unidentified STARTED, BOOKMARK, FINISHED or FAILED
-blocks recovery; lack of events does not prove exclusive native audio ownership.
-Up to 128 unidentified IDs are retained as metadata, including through logical
-replacement/stop. Ownership correlation clears a matching ID, but a successful
-global stop does not clear unidentified evidence. Evidence loss or ambiguous
-ownership blocks recovery conservatively; unresolved evidence may keep it blocked.
+bookmark arrives. Unidentified STARTED and BOOKMARK records block recovery until
+ownership is resolved or FINISHED/FAILED is observed for that ID. A terminal removes
+that record from the unresolved count without attributing it to a submitted request.
+Terminal metadata remains available for diagnostics, and the separate event caches
+still require an exact ownership bookmark before changing narration state. Delayed
+or duplicate events do not reopen a retained terminal ID. This does not establish
+native ID reuse rules or exclusive native audio ownership.
+Up to 128 unidentified records are retained, preferring eviction of terminal
+metadata. Unresolved evidence is never evicted to permit recovery; overflow keeps
+the existing evidence-loss guard. Records carry through logical replacement/stop,
+including metadata updates for already-retained IDs during Full narration. Full
+does not collect new unidentified IDs or change its native playback handling.
+Ownership correlation clears a matching ID, but a returned global stop call does
+not resolve unidentified evidence. Ambiguity and evidence-loss guards remain.
 
 An eligible stale bookmark requests exactly one additional native
 `StopSpeakingText()` for that newer session. Its budget is consumed before native
@@ -364,6 +372,25 @@ Remaining logic checks do not establish native event ordering or playback timing
 It keeps the latest 200 timestamped events in a ring buffer, plus formats bounded
 current/retired state snapshots. The recorder uses IDs and decisions, never quest
 text or callbacks, and prints nothing. Times use the client `GetTime()` timebase.
+Unidentified snapshots include idle controller state, native IDs, first/last events
+and times, observed terminal/status, and the controller session/source at first
+observation. That observation context is not ownership of the native utterance.
+Each `other-unidentified-playback` skip records the exact unresolved IDs and their
+states as `emergency-stop-blocker` events, subject to the same 200-event limit.
+Quest, Quest Log, and Gossip supply diagnostic source labels; Talking Head close
+supplies a cancellation trigger while preserving the normal `manual` stop reason.
+Replacement records identify the incoming source. Speech methods accept an optional
+diagnostic source after the existing callbacks, `Narration:Speak` accepts it after
+the display title, and `Stop` accepts an optional diagnostic trigger after the
+replacement ID. These labels are metadata only and never drive playback decisions.
+Presentation requests also record `narration-requested`, `narration-cancelled`,
+`narration-opening-started`, `narration-submission-scheduled`,
+`narration-submission-cancelled`, and `narration-submitting` with request IDs and
+sources. Scheduled submission records include the 0.5-second delay. Request IDs are separate
+from TTS session IDs: cancelling for replacement now happens before the new TTS
+session exists. Its outgoing `stopTrigger` identifies the incoming source; a
+presentation replacement therefore has no numeric `replacedBy` session ID at
+cancellation. Direct TTS replacements retain their existing session linkage.
 Recorder errors are isolated from playback decisions. Removing this file and its
 TOC entry leaves essential state tracking and cancellation functional; recorder
 removal is covered by standalone mocks.
@@ -417,6 +444,7 @@ lua Tests/VoiceSelection.lua
 lua Tests/TTS.lua
 lua Tests/QuestIntegration.lua
 lua Tests/GossipIntegration.lua
+lua Tests/TalkingHead.lua
 ```
 
 Voice-selection tests exercise the generated mappings, real Options controls,
@@ -448,6 +476,12 @@ to Talking Head and TTS, call ordering, repeated clicks, deferred UI loading,
 unresolved inputs, and failed speech submission. Additional checks use the real
 TTS dispatcher to verify saved reading modes and session replacement. The mocks
 do not prove Forever's actual event ordering, UI rendering, or model readiness.
+The existing lifecycle/integration tests describe the previous end-of-opening
+submission gate and live-context invalidation. They have not been updated or run
+for the snapshot/0.5-second lifecycle revision and are not verification of that
+revision. Its verification is the source-level walkthrough below; no automated,
+simulation or in-game tests were executed and no test files were added. No mock
+suite proves native animation duration, completion ordering, model readiness or audio.
 They also check player fallback and cancellation of pending automatic requests
 on manual click, close, disabling, quest/page replacement, or another TTS session,
 including a callback delivered after cancellation.
@@ -514,24 +548,31 @@ and captures `GetTitleText()` alongside the dialogue at narration start.
 The chosen model unit, title, and unchanged dialogue enter the same presentation lifecycle:
 
 ```lua
-local ok, reason = OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitle)
+local accepted = OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitle)
 ```
 
 The existing Talking Head singleton is under `OutLoud.UI.TalkingHead`, not a
-separate `OutLoud.TalkingHead`. Show receives the current dialogue and prepares
-the complete text or first normalized sentence according to the saved reading mode.
-`TalkingHead:Show(unit, text, displayTitle)` accepts an optional independent title;
-omitting it retains `UnitName(unit)`, preserving Multiple Voices speaker names.
+separate `OutLoud.TalkingHead`. `Narration:Speak(unit, text, voiceID, displayTitle,
+diagnosticSource, modelFileID)` captures speaker name/faction and the reading mode
+at acceptance. Quest/Gossip pass the already-resolved model FileDataID for NPC
+portraits. `TalkingHead:Show(speaker, text, readingMode, onOpening)` receives only
+captured data and prepares full text or its first normalized sentence. Omitting
+the narration title captures `UnitName(unit)` at request time.
 Quest narration passes an empty override if its title is missing, which displays
 `"Quest"` instead of a previous title or a unit name. The title is set once per
-Show; loading, sentence transitions, and completion never reread quest UI state.
+request; loading, opening, sentence transitions and submission never reread quest UI state.
 The title getters were checked against the local Forever export's `QuestInfo.lua`,
 `QuestFrame.lua`, and `QuestLogDocumentation.lua`; their live results across
 Detail/Progress/Reward and Quest Log still require in-game verification.
-The TTS dispatcher applies the existing reading mode and owns cancellation/restart;
-quest integration never selects streaming/full methods or splits sentences itself.
-If `Speak()` returns `false`, integration calls `talkingHead:Hide()`, which also
-clears the loading spinner, and preserves the failure return values.
+The TTS dispatcher applies the existing reading mode; quest integration never
+selects streaming/full methods or splits sentences itself. `Narration:Speak()`
+returns presentation-request acceptance, not native submission success. Native
+submission is scheduled 0.5 seconds after opening begins; rejection is reported through
+the existing error logger and closes the presentation. Direct TTS methods retain
+their synchronous return values. The captured reading mode is passed as the
+optional final argument to `TTS:Speak()`, keeping presentation and dispatch aligned
+even if settings change while waiting. Direct callers that omit it use the saved
+mode as before. Speech rate retains its existing per-submission behavior.
 
 The spinner turns on before speech submission. The shared `OutLoud.Narration`
 controller supplies a session-end callback that hides Talking Head and clears
@@ -544,10 +585,94 @@ bookmark, once per session in both reading modes, and checks the same presentati
 ownership token. The spinner stays on while speech is generating; submission
 return and unowned playback-start events do not clear it. TTS does not depend on
 the UI.
-Closing or changing the quest window updates button visibility and cancels a
-pending automatic request; it neither stops active narration nor hides Talking
-Head. The Talking Head close button hides the
-presentation and spinner, then calls `OutLoud.TTS:Stop()` to cancel narration.
+Closing or changing the quest window updates button visibility and may cancel an
+automatic activation that has not yet captured a narration request. Accepted
+snapshots continue during navigation, closing, opening and speech. The Talking Head close button calls `Narration:Stop()` to
+clear active/pending presentation ownership and scheduled automatic narration,
+then starts closing, which immediately calls `TTS:Stop()`.
+
+### Talking Head narration lifecycle
+
+The visual singleton owns `State`: `Closed`, `Opening`, `Opened`, `Closing`.
+`Narration.Narration` holds only the latest accepted request. Text, resolved voice,
+speaker name/faction/model asset, reading mode and source form its immutable
+content. Submission/timer bookkeeping is separate mutable request state. There
+is no `isCurrent` validator, `ValidatePending`, context revision or live quest/text
+comparison after acceptance. Request-time integration guards are unchanged.
+
+1. Replacement establishes the new owner, invalidates/cancels the old submission
+   timer, and stops current TTS immediately, before any exit animation work.
+2. While `Closing`, new requests replace the pending request without restarting
+   the exit. `MainFrame.Close.OnFinished` sets `Closed` and hides the old root.
+3. `Narration:OnClosed()` opens only the latest captured request. `Show()`
+   accepts only `Closed`; it cannot interrupt an exit or replace visible content.
+4. Starting the existing opening groups schedules one `C_Timer.NewTimer(0.5)`.
+   Its callback requires the same request owner and presentation transition, a
+   shown frame in `Opening` or `Opened`, and no prior submission. It never queries
+   quest selection, description, gossip, unit availability or voice configuration.
+5. `MainFrame.TalkingHeadsInAnim.OnFinished` only sets `Opened` and applies the
+   latest text progress received during opening. It never submits TTS. Entrance
+   visuals/durations remain unchanged (the main group ends at 1.75 seconds).
+
+Each entrance/exit callback captures a transition identity and checks its phase.
+Consumed/interrupted callbacks are cleared; even retained obsolete callbacks
+cannot submit speech or finish a newer exit. Sentence exits also capture
+presentation/fade identities, so an old
+completion cannot consume a newer presentation's pending sentence. They preserve
+the existing latest-pending-sentence behavior within the same active fade. TTS
+callbacks and delayed submission check request ownership and transition identity.
+Timer cancellation clears the submission token
+before `Cancel()`, so even a delivered cancelled callback is harmless. The submitted
+flag is set before entering TTS to prevent duplicates under reentrancy. The new
+0.5-second submission timer is distinct from automatic activation and text-scroll
+timers. No native-queue retry, polling or resubmission is added.
+
+`Narration:Stop()` works before any TTS session exists and cancels pending work
+while allowing the exit to finish. An optional `TTS.onStopRequested` observer is
+called before session lookup/native STOP, including an idle Stop. Narration uses
+it to invalidate pending presentation work for direct Stop/direct TTS replacement.
+Its own cancellation and submission are guarded to avoid recursive native stops
+or cancelling its incoming request. A pre-stop notification is needed so an older
+stop cannot invalidate newer work requested reentrantly during native STOP.
+The TTS controller has no quest or UI dependency; its existing session, bookmark,
+prefetch, stale-playback, Emergency STOP and Full-mode decisions are unchanged.
+
+Quest, Quest Log and Gossip validate/read their source only when activation
+captures a request. Their UI refresh hooks no longer cancel accepted content.
+Quest Log still rejects a click when selected quest and displayed details disagree,
+or required UI/text/index data is unavailable; rejection leaves the current owner
+alone. Navigation itself never creates a new narration request.
+
+NPC portraits render the captured FileDataID with `PlayerModel:SetModel(asset)`;
+the local `SimpleModelAPIDocumentation.lua` declares its ModelAsset argument.
+This avoids binding a delayed portrait to a different live `questnpc`/`npc`.
+The request carries the model ID already validated by voice resolution; it does
+not guess models or reload source NPCs. Missing/failed assets leave a cleared
+portrait and do not discard narration. Player narration retains the known
+`SetUnit("player")` path. Asset loading is source-informed, not verified in-game;
+a model FileDataID does not capture NPC display textures/equipment/customization.
+Verify snapshot portraits visually in Forever. The animation XML is unchanged.
+
+Logical source walkthrough for this revision (not executed tests):
+
+| Scenario | Ownership and state result |
+| --- | --- |
+| First narration from Closed | Capture, install owner, stop any direct TTS, open immediately, schedule speech at opening +0.5 s. |
+| Replacement while Opened | Install new owner, cancel outgoing speech immediately, finish Closing, then open/schedule latest snapshot. |
+| Replacement during Opening | Cancel old timer or active speech, invalidate its transition, finish Closing, then open latest. |
+| Multiple replacements during Closing | Each accepted request replaces ownership; the same closing transition keeps running and drains only latest. |
+| Rapid A → B → A Quest Log navigation | Successful Out Loud activations replace ownership in order; invalid/not-ready clicks are rejected. Navigation alone does not replace/cancel accepted snapshots. |
+| Change selection after capture | Captured text/title/voice remain; neither opening nor submission reads the new selection. |
+| Manual close before +0.5 s | Clear owner and timer token, cancel timer, stop controller, continue Closing; delayed callback cannot submit. |
+| Manual close during active TTS | Clear owner, native Stop immediately, continue Closing; old TTS callbacks fail ownership checks. |
+| Stale timer/animation/TTS callbacks | Submission token, transition identity, owner and phase guards prevent changes to newer presentation/speech. |
+| Repeated clicks on same quest | Each valid click creates a fresh owner and snapshot; only latest reopens/submits after the existing exit. |
+
+Actual timer cadence (including late callbacks), animation interruption/completion,
+snapshot portraits, speech during opening, spinner/text progress, audio/bookmarks
+and stale native prefetched playback still require manual WoW verification.
+Lifecycle sequencing does not establish native queue removal or newer-speech
+survival after an Emergency STOP.
 
 ### Automatic QuestFrame narration
 
@@ -629,8 +754,12 @@ Replacing the automatic event, closing QuestFrame, changing the quest/page/text,
 disabling automatic narration, or starting manual QuestFrame narration cancels
 and clears the pending timer. Existing frame lifecycle hooks check context;
 a post-hook on `Database:SetAutoNarrateQuests()` handles disabling the setting.
-A post-hook on `TTS:StartSession()` also cancels pending automatic narration when
-another narration session starts, including Quest Log or direct TTS calls.
+Post-hooks on `Narration:Speak()` and `Narration:Stop()` cancel the scheduled timer
+when a shared presentation request is accepted or manually cancelled, before TTS
+submission exists. The `TTS:StartSession()` hook remains necessary for direct TTS
+calls. Disabling automatic narration cancels only activation still waiting for
+its configurable delay; a captured/accepted snapshot remains owned until replaced,
+stopped or completed, including while its submission timer is waiting.
 Cancelled callbacks cannot revive an old request. There are no extra event
 frames, polling, or show/hide narration triggers; the timer only schedules the
 automatic path, without changing TTS generation or streaming.
@@ -702,8 +831,8 @@ It forwards the existing end, playback-start, and text-progress callbacks from
 `TTS:Speak()` to the same Talking Head. New narration replaces ownership before
 TTS cancels the previous session, so a stale callback cannot hide the new speaker.
 Both reading modes, loading, sentence fades, paged scrolling, and close/cancel
-behavior remain in their existing services. Closing the Quest Log only hides
-its button; narration can continue.
+behavior remain in their existing services. Closing the Quest Log hides its button;
+accepted snapshots continue, including while closing/opening or awaiting submission.
 
 Button placement/visibility, player rendering and voice tokens, description-only
 audio in both modes, and replacement between QuestFrame and Quest Log narration
@@ -757,8 +886,9 @@ and Split modes, rate, sanitization, XML escaping, ownership and replacement.
 Closing GossipFrame hides its button and prevents another read; as with QuestFrame,
 it does not stop an existing narration. Subsequent reads recapture identity/text
 and clear the shared inspection model before loading. Starting manual gossip
-speech also cancels a pending automatic quest request through the existing TTS
-`StartSession` hook. Opening or updating gossip never starts speech.
+speech cancels a pending automatic quest request when the shared narration request
+is accepted, before its opening completes. Closing/updating gossip does not cancel
+accepted snapshots. Opening or updating gossip never starts speech.
 
 Source inspection establishes the API/layout and routed lifecycle above. The user
 reported in-game `"npc"` availability, name, sex, `SetUnit("npc")` and a valid model
@@ -779,8 +909,9 @@ and sequencing from the adjacent `TalkingHeadUI.lua`. Out Loud does not instanti
 Blizzard's live `TalkingHeadFrame` or attach its conversation/model mixins.
 The root retains size 570 by 155 and scale 1.05. It is centered horizontally,
 anchored to `UIParent`'s top with a Y offset of -60, on the `BACKGROUND` strata.
-Faction atlas selection and `PlayerModel:SetUnit(unit)` remain unchanged; name
-colors, text styling, and internal text anchors follow the Blizzard reference.
+Faction atlas selection uses captured speaker data; name colors, text styling,
+and internal text anchors follow the Blizzard reference. Player portraits keep
+`SetUnit("player")`; NPC portraits use the captured model asset described above.
 
 The root stays at alpha 1. Animated regions reset to alpha 0.01, including the
 portrait backdrop, which now belongs to the model as in Blizzard's hierarchy.
@@ -812,16 +943,18 @@ Decorative alpha peaks at 0.7 and returns to 0:
 `Hide()` stops entrance effects and runs the five Blizzard-style `Close` groups,
 which fade the model/backdrop, portrait, background, name, text, and close button
 from 1 to 0 over one second. The main close group's completion hides the root.
-Repeated Hide calls keep the running exit; Show stops all groups, resets alpha
-and animation transforms, replaces the NPC/text, and starts a fresh entrance.
+Repeated Hide calls keep the running exit. Show only runs in `Closed`, resets
+alpha and animation transforms, prepares the NPC/text, and starts a fresh entrance.
+Opening start schedules speech at +0.5 seconds; entrance completion only changes
+visual state and applies any buffered text progress.
 Unused name/text `Fadeout` groups have been removed; Out Loud does not perform
 Blizzard's automatic conversation-line transitions.
 Conversation timers, sound playback, and model animation kits requiring
 `C_TalkingHead` are deliberately excluded.
 
 The spinner stays outside these animation groups and remains controlled by
-`SetLoading()`. The close button still cancels speech immediately; animations
-affect only presentation. In-game checks are required for native XML/template
+`SetLoading()`. The close button cancels speech immediately; opening/closing
+completion now also coordinates narration. In-game checks are required for native XML/template
 loading, fonts/atlases, model/backdrop opacity, movement, and interrupted reuse.
 
 ### Speaker model idle pose
@@ -883,11 +1016,11 @@ All scroll positions are clamped to the measured vertical overflow.
 New narration and displayed sentences reset to the top. Finish stops text motion
 and retains the final text at its current position during the existing closing
 sequence.
-Cancellation stops pending fades/motion and resets to the top. Hide stops updates
-immediately, then resets the scroll position when the visual exit finishes;
-Show during that exit cancels it and resets immediately. Existing quest integration
-still closes Talking Head when narration ends. Loading and TTS cancellation are
-unchanged. Scrollbar placement/dragging, scrolling speed, text clipping, sentence
+Cancellation stops pending fades/motion and resets to the top. A normal finish
+retains the last scroll position during the exit and resets when the root hides.
+Replacement waits for that exit before Show prepares the new content. Narration
+still closes Talking Head when speech ends. Scrollbar placement/dragging,
+scrolling speed, text clipping, sentence
 transitions, and cancellation/reuse need visual in-game verification.
 
 Missing text produces no new Talking Head presentation or speech. In Race & Gender mode, NPC resolution

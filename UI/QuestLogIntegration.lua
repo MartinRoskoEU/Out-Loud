@@ -69,7 +69,7 @@ function QuestLogIntegration:SpeakCurrentText()
         return
     end
 
-    return OutLoud.Narration:Speak("player", description, voiceID, displayTitle)
+    return OutLoud.Narration:Speak("player", description, voiceID, displayTitle, "Quest Log")
 end
 
 function QuestLogIntegration:Initialize()

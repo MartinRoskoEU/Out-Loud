@@ -1,6 +1,6 @@
 local AddonName, OutLoud = ...
 
-local TalkingHead = {}
+local TalkingHead = { State = "Closed" }
 OutLoud.UI.TalkingHead = TalkingHead
 
 local INITIAL_SCROLL_DELAY = 10
@@ -13,7 +13,7 @@ local TEXT_BOTTOM_OFFSET = 24 -- Space between the text viewport and the frame's
 
 local function CanAutoScroll(self)
     return self.PlaybackActive and not self.ManualScrollPaused and not self.PendingSentence
-        and not self.IsClosing and self.Frame:IsShown()
+        and self.State == "Opened" and self.Frame:IsShown()
 end
 
 local function AtlasOrFallback(primary, fallback)
@@ -80,8 +80,7 @@ function TalkingHead:Initialize()
     dialogText:SetShadowColor(0, 0, 0, 0)
 
     main.CloseButton:SetScript("OnClick", function()
-        self:Hide()
-        OutLoud.TTS:Stop()
+        OutLoud.Narration:Stop(nil, "Talking Head close")
     end)
 
     local spinner = CreateFrame("Frame", nil, frame, "LoadingSpinnerTemplate")
@@ -154,18 +153,16 @@ function TalkingHead:Initialize()
     end)
     frame:HookScript("OnHide", function()
         self:StopTextFlow(true)
+        if self.State ~= "Closed" then
+            -- An external Hide must also invalidate an unfinished entrance.
+            self.State, self.Transition = "Closed", nil
+            main.TalkingHeadsInAnim:SetScript("OnFinished", nil)
+            main.Close:SetScript("OnFinished", nil)
+            self:StopAnimations()
+            self:SetLoading(false)
+            OutLoud.Narration:Stop(nil, "Talking Head hidden")
+        end
     end)
-    textFrame.SentenceOut:SetScript("OnFinished", function()
-        local pending = self.PendingSentence
-        if not pending or self.IsClosing then return end
-        self.PendingSentence = nil
-        self:SetDisplayedText(pending.text)
-        self.ManualScrollPaused = pending.manualScrollPaused
-        self.PlaybackActive = true
-        textFrame.SentenceIn:Play()
-        self:StartAutoScroll()
-    end)
-
     self.Decorations = {
         main.Sheen, main.TextSheen, main.Overlay.Glow_TopBar,
         main.Overlay.Glow_LeftBar, main.Overlay.Glow_RightBar,
@@ -178,13 +175,6 @@ function TalkingHead:Initialize()
         self.AnimatedRegions[#self.AnimatedRegions + 1] = region
     end
 
-    main.Close:SetScript("OnFinished", function()
-        if self.IsClosing then
-            self.IsClosing = false
-            frame:Hide()
-        end
-    end)
-
     self:ResetAnimations()
     self.Initialized = true
 end
@@ -196,8 +186,6 @@ function TalkingHead:StopAnimations()
 end
 
 function TalkingHead:ResetAnimations()
-    -- Clear closing first so a replaced exit cannot hide a new narration.
-    self.IsClosing = false
     self:StopTextFlow(true)
     self:StopAnimations()
     self.Frame:SetAlpha(1)
@@ -206,16 +194,23 @@ function TalkingHead:ResetAnimations()
     end
 end
 
-function TalkingHead:Show(unit, text, displayTitle)
-    if not unit or not UnitExists(unit) then
-        self:Hide()
-        return
-    end
-
+function TalkingHead:Show(speaker, text, readingMode, onOpening)
     self:Initialize()
-    self:ResetAnimations()
+    if self.State ~= "Closed" then return false, "talking-head-busy" end
 
-    local faction = UnitFactionGroup(unit)
+    self:ResetAnimations()
+    local transition = {}
+    self.State, self.Transition = "Opening", transition
+    self.Frame.MainFrame.TalkingHeadsInAnim:SetScript("OnFinished", function()
+        if self.State ~= "Opening" or self.Transition ~= transition then return end
+        self.State = "Opened"
+        self.Frame.MainFrame.TalkingHeadsInAnim:SetScript("OnFinished", nil)
+        local progress = self.OpeningProgress
+        self.OpeningProgress = nil
+        if progress then self:OnTextProgress(progress.text, progress.chunk) end
+    end)
+
+    local faction = speaker.faction
 
     local textureKit
     if faction == "Horde" then
@@ -250,26 +245,23 @@ function TalkingHead:Show(unit, text, displayTitle)
         true
     )
 
-    self.Model:SetUnit(unit)
+    self.Model:ClearModel()
+    if speaker.unit == "player" then
+        -- Player identity is stable; never look up a live questnpc/npc after capture.
+        self.Model:SetUnit("player")
+    elseif type(speaker.modelFileID) == "number" and speaker.modelFileID > 0 then
+        -- Render the captured asset, even if the original NPC token has changed.
+        local ok, message = pcall(self.Model.SetModel, self.Model, speaker.modelFileID)
+        if not ok then OutLoud:Debug("Talking Head snapshot portrait unavailable:", tostring(message)) end
+    end
     self.Model:SetAnimation(0, 0)
 
     if self.Model.SetPortraitZoom then
         self.Model:SetPortraitZoom(1)
     end
 
-    if displayTitle == nil then
-        displayTitle = UnitName(unit) or "Unknown"
-    elseif type(displayTitle) ~= "string" or not displayTitle:find("%S") then
-        displayTitle = "Quest"
-    end
-    self.NameText:SetText(displayTitle)
-    local readingMode = OutLoud.Database:GetReadingMode()
-    self.DisplayChunk = readingMode == OutLoud.TTS.ReadingModes.SPLIT and 1 or 0
-    local displayed = text or ""
-    if readingMode == OutLoud.TTS.ReadingModes.SPLIT then
-        displayed = OutLoud.TTS:SplitSentences(displayed)[1] or ""
-    end
-    self:SetDisplayedText(displayed)
+    self.NameText:SetText(speaker.name)
+    self:PrepareText(text, readingMode)
 
     if faction == "Alliance" then
         self.NameText:SetTextColor(0.02, 0.17, 0.33, 1)
@@ -280,18 +272,34 @@ function TalkingHead:Show(unit, text, displayTitle)
     end
 
     self.Frame:Show()
+    if self.State ~= "Opening" or self.Transition ~= transition then return true end
+    self:SetLoading(true)
     for _, group in ipairs(self.FadeInGroups) do
         group:Play()
     end
+    if self.State == "Opening" and self.Transition == transition and onOpening then
+        onOpening(transition)
+    end
+    return true
+end
+
+function TalkingHead:PrepareText(text, readingMode)
+    self.DisplayChunk = readingMode == OutLoud.TTS.ReadingModes.SPLIT and 1 or 0
+    local displayed = text or ""
+    if readingMode == OutLoud.TTS.ReadingModes.SPLIT then
+        displayed = OutLoud.TTS:SplitSentences(displayed)[1] or ""
+    end
+    self:SetDisplayedText(displayed)
 end
 
 function TalkingHead:StopTextFlow(resetScroll)
     self:StopAutoScroll()
     self.PlaybackActive = false
     self.TextScrollBar:UnregisterUpdate()
+    self.PendingSentence, self.OpeningProgress, self.SentenceTransition = nil, nil, nil
+    self.Frame.TextFrame.SentenceOut:SetScript("OnFinished", nil)
     self.Frame.TextFrame.SentenceOut:Stop()
     self.Frame.TextFrame.SentenceIn:Stop()
-    self.PendingSentence = nil
     if resetScroll then
         self.ManualScrollPaused = false
         self:SetTextScroll(0)
@@ -420,7 +428,12 @@ function TalkingHead:StartAutoScroll(delay)
 end
 
 function TalkingHead:OnTextProgress(text, chunk)
-    if not self.Frame or not self.Frame:IsShown() or self.IsClosing then return end
+    if self.State == "Opening" then
+        -- Preserve the entrance fades while speech/bookmarks can already progress.
+        self.OpeningProgress = { text = text, chunk = chunk }
+        return
+    end
+    if not self.Frame or not self.Frame:IsShown() or self.State ~= "Opened" then return end
     if chunk < self.DisplayChunk then return end
     if chunk > self.DisplayChunk then
         self.DisplayChunk = chunk
@@ -433,10 +446,26 @@ function TalkingHead:OnTextProgress(text, chunk)
         textFrame.Fadein:Stop()
         textFrame.SentenceIn:Stop()
         if not textFrame.SentenceOut:IsPlaying() then
+            local transition, sentenceTransition = self.Transition, {}
+            self.SentenceTransition = sentenceTransition
+            textFrame.SentenceOut:SetScript("OnFinished", function()
+                if self.State ~= "Opened" or self.Transition ~= transition
+                    or self.SentenceTransition ~= sentenceTransition then return end
+                self.SentenceTransition = nil
+                textFrame.SentenceOut:SetScript("OnFinished", nil)
+                local pending = self.PendingSentence
+                if not pending then return end
+                self.PendingSentence = nil
+                self:SetDisplayedText(pending.text)
+                self.ManualScrollPaused = pending.manualScrollPaused
+                self.PlaybackActive = true
+                textFrame.SentenceIn:Play()
+                self:StartAutoScroll()
+            end)
             textFrame.SentenceOut:Play()
         end
     elseif not self.PendingSentence and not self.PlaybackActive then
-        -- Quest integration forwards this only for a current owned playback bookmark.
+        -- Narration forwards this only for a current owned playback bookmark.
         self.PlaybackActive = true
         self:StartAutoScroll()
     end
@@ -444,14 +473,14 @@ end
 
 function TalkingHead:FinishTextPlayback(reason)
     self.Model:SetAnimation(0, 0)
-    if reason == "finished" and not self.IsClosing then
+    if reason == "finished" and self.State == "Opened" then
         if self.PendingSentence then
             self:SetDisplayedText(self.PendingSentence.text)
         end
         self:UpdateTextLayout()
     end
     self:StopTextFlow(reason ~= "finished")
-    if reason == "finished" and not self.IsClosing then
+    if reason == "finished" and self.State == "Opened" then
         self.DialogText:SetAlpha(1)
     end
 end
@@ -468,7 +497,14 @@ function TalkingHead:SetLoading(isLoading)
     end
 end
 
-function TalkingHead:Hide()
+function TalkingHead:Hide(reason, diagnosticTrigger)
+    if self.State == "Closed" or self.State == "Closing" then return end
+    local transition = {}
+    self.State, self.Transition = "Closing", transition
+    self.Frame.MainFrame.TalkingHeadsInAnim:SetScript("OnFinished", nil)
+    -- Invalidate opening first; native STOP may synchronously emit playback events.
+    OutLoud.Narration:OnClosing(reason, diagnosticTrigger)
+    if self.State ~= "Closing" or self.Transition ~= transition then return end
     if self.Model then
         self.Model:SetAnimation(0, 0)
     end
@@ -478,17 +514,19 @@ function TalkingHead:Hide()
         self.Spinner:Hide()
     end
 
-    if not self.Frame or not self.Frame:IsShown() or self.IsClosing then
-        return
-    end
-
-    self:StopTextFlow(false)
+    self:StopTextFlow(reason ~= "finished")
     -- Native Stop resets Scale/Translation effects before the one-second exit.
     self:StopAnimations()
     for _, region in ipairs(self.Decorations) do
         region:SetAlpha(0)
     end
-    self.IsClosing = true
+    self.Frame.MainFrame.Close:SetScript("OnFinished", function()
+        if self.State ~= "Closing" or self.Transition ~= transition then return end
+        self.State, self.Transition = "Closed", nil
+        self.Frame.MainFrame.Close:SetScript("OnFinished", nil)
+        self.Frame:Hide()
+        OutLoud.Narration:OnClosed()
+    end)
     for _, group in ipairs(self.CloseGroups) do
         group:Play()
     end

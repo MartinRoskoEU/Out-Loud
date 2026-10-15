@@ -115,11 +115,32 @@ local function Harness(deferredGossip)
         "Core/VoiceSelection.lua", "Core/Database.lua", "Core/TTS.lua", "Core/Narration.lua",
         "UI/QuestIntegration.lua", "UI/GossipIntegration.lua" }) do Load(path) end
     addon.UI.TalkingHead = {
-        Show = function(self, unit, text, title)
+        -- These integration fixtures finish animations immediately. The production
+        -- animation lifecycle is exercised separately in Tests/TalkingHead.lua.
+        State = "Closed", Initialize = function() end,
+        Show = function(self, unit, text, title, onOpened)
             self.shown = true
+            self.State = "Opening"
             h.heads[#h.heads + 1] = { unit = unit, text = text, title = title }
+            self:SetLoading(true)
+            self.opened = function()
+                self.State = "Opened"
+                onOpened()
+            end
+            if not h.deferAnimations then self.opened() end
+            return true
         end,
-        Hide = function(self) self.shown, self.loading = false, false end,
+        Hide = function(self, reason, trigger)
+            if self.State == "Closed" or self.State == "Closing" then return end
+            self.State = "Closing"
+            addon.Narration:OnClosing(reason, trigger)
+            self.shown, self.loading = false, false
+            self.closed = function()
+                self.State = "Closed"
+                addon.Narration:OnClosed()
+            end
+            if not h.deferAnimations then self.closed() end
+        end,
         SetLoading = function(self, loading) self.loading = loading end,
         FinishTextPlayback = function(_, reason) h.endReason = reason end,
         OnTextProgress = function(_, text, chunk)
@@ -375,6 +396,7 @@ Test("Existing dispatcher preserves original display, sanitization, escaping, ra
             and "A B &amp; C D . Next page here!" or "A B &amp; C D .")
         Equal(#h.calls, 1)
         local tts, head = h.addon.TTS, h.addon.UI.TalkingHead
+        Equal(tts.CurrentSession.source, "Gossip", "Diagnostic source comes from the actual caller")
         tts:OnEvent("VOICE_CHAT_TTS_PLAYBACK_BOOKMARK", 101, h.calls[1].mark)
         Equal(head.loading, false)
         Equal(h.progress[1].text, mode == "full" and h.gossipText or "A/B & C_<D>.")
@@ -463,6 +485,36 @@ Test("Submission failures and empty sanitized text clean up presentation", funct
             Equal(h.addon.UI.TalkingHead.shown, false)
             Equal(h.addon.UI.TalkingHead.loading, false)
         end
+    end
+end)
+
+Test("Gossip requests cancel the automatic delay before opening completes", function()
+    local h = Harness()
+    h.deferAnimations = true
+    h:CreateQuestUI()
+    h.addon.Database:SetAutoNarrateQuests(true)
+    h.environment.QuestFrame:Fire("OnEvent", "QUEST_DETAIL")
+    local timer = h.timers[1]
+    h:Open(); h:Click()
+    Equal(timer.cancelled, true)
+    Equal(#h.calls, 0, "Accepted presentation cancels the timer before any TTS session")
+    timer:Fire()
+    h.addon.UI.TalkingHead.opened()
+    Equal(#h.calls, 1)
+end)
+
+Test("Changed or closed gossip invalidates speech waiting for animations", function()
+    for _, change in ipairs({ "text", "npc", "hide", "refresh" }) do
+        local h = Harness()
+        h.deferAnimations = true
+        h:Open(); h:Click()
+        if change == "text" then h.gossipText = "New greeting."
+        elseif change == "npc" then h.units.npc.name = "Other NPC"
+        elseif change == "hide" then h.environment.GossipFrame:Hide()
+        else h.environment.GossipFrame:Update() end
+        h.addon.UI.TalkingHead.opened()
+        Equal(#h.calls, 0)
+        Equal(h.addon.Narration.Narration, nil)
     end
 end)
 

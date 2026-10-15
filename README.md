@@ -92,7 +92,8 @@ once, regardless of how many models use it. Assignments are saved between sessio
 The **Narration** section of Options offers two reading modes:
 
 - **Split text:** reads sentence by sentence, submitting the first sentence
-  immediately and prefetching one sentence ahead as playback begins.
+  0.5 seconds after Talking Head starts opening and prefetching one sentence ahead
+  as playback begins.
 - **Read full text** (default): sends the complete text to TTS in one request.
 
 Talking Head displays the full dialogue in full mode and the currently spoken
@@ -100,14 +101,17 @@ sentence in split mode. Sentence changes use a brief text-only fade.
 Overflowing text scrolls gently once playback begins and has a scrollbar for
 manual reading. Scrolling manually pauses automatic movement for that text.
 
-All Out Loud narration buttons use this choice. Clicking again restarts narration
-through the speech controller.
+All Out Loud narration buttons use this choice. Each valid request captures its
+dialogue and voice; later quest navigation does not cancel it. Speech is submitted
+0.5 seconds after Talking Head starts opening. Clicking again stops speech
+immediately, finishes closing, then opens the latest requested dialogue.
 
 Enable **Automatically read quest text** in the same section to start narration
 when quest details, progress, or reward pages open. It defaults to off and does
 not apply to Quest Log or gossip. **Automatic narration delay** waits 2 seconds by default,
 adjustable from 0 to 5 seconds in 0.5-second steps. The delay control is available
-when automatic narration is enabled. Manual narration always starts immediately.
+when automatic narration is enabled. Manual requests skip this configurable delay
+and use the same Talking Head opening/closing lifecycle.
 
 **Speech Rate** adjusts narration speed from -10 (Slower) to +10 (Faster) in
 integer steps. The default is 0 (Normal), restored with **Reset to 0**. It is

@@ -41,6 +41,26 @@ local function AddSentence(lines, sentence)
     end
 end
 
+local function AddUnidentified(lines, buffer)
+    if not buffer then return end
+    lines[#lines + 1] = "Unidentified playback: unresolved=" .. Value(buffer.unidentifiedPlaybackCount)
+        .. " evidence-lost=" .. Value(buffer.recoveryEvidenceLost == true)
+        .. " ambiguous=" .. Value(buffer.recoveryOwnershipAmbiguous == true)
+    local ids = {}
+    for utteranceID in pairs(buffer.unidentifiedPlayback or {}) do ids[#ids + 1] = utteranceID end
+    table.sort(ids)
+    for _, utteranceID in ipairs(ids) do
+        local evidence = buffer.unidentifiedPlayback[utteranceID]
+        lines[#lines + 1] = "  utterance=" .. Value(utteranceID)
+            .. " first=" .. Value(evidence.firstEvent or evidence.event) .. " at=" .. Value(evidence.firstAt or evidence.at)
+            .. " last=" .. Value(evidence.lastEvent or evidence.event) .. " at=" .. Value(evidence.lastAt or evidence.at)
+            .. " terminal=" .. Value(evidence.terminal) .. " at=" .. Value(evidence.terminalAt)
+            .. " status=" .. Value(evidence.status)
+            .. " observed-session=" .. Value(evidence.observedSessionID)
+            .. " observed-source=" .. Value(evidence.observedSource)
+    end
+end
+
 function Diagnostics:GetReport()
     local lines = {
         "Out Loud TTS lifecycle report",
@@ -49,19 +69,13 @@ function Diagnostics:GetReport()
     local tts = OutLoud.TTS
     local session = tts and tts.CurrentSession
     if session then
-        lines[#lines + 1] = string.format("Current: s=%s mode=%s state=%s created=%.3f",
-            session.id, session.mode, session.state, session.createdAt)
+        lines[#lines + 1] = string.format("Current: s=%s mode=%s state=%s created=%.3f source=%s",
+            session.id, session.mode, session.state, session.createdAt, Value(session.source))
         if session.sentenceStates then
             lines[#lines + 1] = string.format("Recovery: attempted=%s result=%s from=%s unidentified=%s evidence-lost=%s",
                 Value(session.emergencyRecoveryAttempted == true), Value(session.emergencyRecoveryResult),
                 Value(session.emergencyRecoveredFrom), Value(session.unidentifiedPlaybackCount),
                 Value(session.recoveryEvidenceLost == true or session.recoveryOwnershipAmbiguous == true))
-            local unowned = {}
-            for utteranceID, evidence in pairs(session.unidentifiedPlayback) do
-                unowned[#unowned + 1] = Value(utteranceID) .. ":" .. evidence.event .. "@" .. Value(evidence.at)
-            end
-            table.sort(unowned)
-            if #unowned > 0 then lines[#lines + 1] = "Unidentified playback: " .. table.concat(unowned, ",") end
         end
         if session.sentenceStates then
             local counts, submitted = {}, {}
@@ -81,11 +95,12 @@ function Diagnostics:GetReport()
     else
         lines[#lines + 1] = "Current: idle"
     end
+    AddUnidentified(lines, session or (tts and tts.IdleSplitEvents))
     lines[#lines + 1] = "Retired Split metadata (maximum 8 sessions / 128 attempts):"
     for _, retired in ipairs(tts and tts.SplitHistory or {}) do
-        lines[#lines + 1] = string.format("s=%s state=%s reason=%s replacement=%s ended=%.3f sentences=%s retained=%s",
+        lines[#lines + 1] = string.format("s=%s state=%s reason=%s replacement=%s ended=%.3f sentences=%s retained=%s source=%s trigger=%s",
             retired.id, retired.state, Value(retired.stopReason or retired.endReason), Value(retired.replacedBy),
-            retired.endedAt, retired.sentenceCount, #retired.order)
+            retired.endedAt, retired.sentenceCount, #retired.order, Value(retired.source), Value(retired.stopTrigger))
         if retired.emergencyRecoveryAttempted then
             lines[#lines + 1] = "  emergency-stop=" .. Value(retired.emergencyRecoveryResult)
                 .. " from=" .. Value(retired.emergencyRecoveredFrom) .. " at=" .. Value(retired.emergencyRecoveryAt)

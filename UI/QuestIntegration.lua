@@ -114,6 +114,7 @@ function QuestIntegration:CancelPendingAutoNarration()
 end
 
 function QuestIntegration:IsAutoNarrationCurrent(request)
+    -- This guards activation before capture, never an accepted narration snapshot.
     if not OutLoud.Database:GetAutoNarrateQuests() or GetQuestID() ~= request.questID then
         return false
     end
@@ -207,7 +208,7 @@ function QuestIntegration:SpeakCurrentText()
     if singleVoice then
         speakerUnit = "player"
     end
-    return OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitle)
+    return OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitle, "Quest", info.modelFileID)
 end
 
 function QuestIntegration:Initialize()
@@ -301,7 +302,14 @@ function QuestIntegration:Initialize()
             self:CancelPendingAutoNarration()
         end
     end)
-    -- Any actual new speech session, including Quest Log/direct TTS, replaces the delay.
+    -- Accepted presentation requests replace the delay before TTS submission exists.
+    hooksecurefunc(OutLoud.Narration, "Speak", function()
+        self:CancelPendingAutoNarration()
+    end)
+    hooksecurefunc(OutLoud.Narration, "Stop", function()
+        self:CancelPendingAutoNarration()
+    end)
+    -- Direct TTS has no presentation request, so retain its session hook.
     hooksecurefunc(OutLoud.TTS, "StartSession", function()
         self:CancelPendingAutoNarration()
     end)

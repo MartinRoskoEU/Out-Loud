@@ -60,18 +60,35 @@ local function SplitBuffer()
         unidentifiedPlayback = {}, unidentifiedPlaybackCount = 0 }
 end
 
+local function RetainUnidentifiedPlayback(buffer, utteranceID, evidence)
+    local count, oldestID, oldestAt = 0
+    for id, retained in pairs(buffer.unidentifiedPlayback) do
+        count = count + 1
+        if retained.terminal and (not oldestAt or retained.lastAt < oldestAt) then
+            oldestID, oldestAt = id, retained.lastAt
+        end
+    end
+    if count >= MAX_PENDING_TERMINALS then
+        if oldestID then
+            buffer.unidentifiedPlayback[oldestID] = nil
+        else
+            -- Losing unresolved evidence must not permit a global recovery stop.
+            if not evidence.terminal then buffer.recoveryEvidenceLost = true end
+            return false
+        end
+    end
+    buffer.unidentifiedPlayback[utteranceID] = evidence
+    if not evidence.terminal then buffer.unidentifiedPlaybackCount = buffer.unidentifiedPlaybackCount + 1 end
+    return true
+end
+
 local function CarryRecoveryEvidence(source, target)
     if not source or not target.unidentifiedPlayback then return end
     target.recoveryEvidenceLost = target.recoveryEvidenceLost or source.recoveryEvidenceLost
     target.recoveryOwnershipAmbiguous = target.recoveryOwnershipAmbiguous or source.recoveryOwnershipAmbiguous
     for utteranceID, evidence in pairs(source.unidentifiedPlayback or {}) do
         if not target.unidentifiedPlayback[utteranceID] then
-            if target.unidentifiedPlaybackCount >= MAX_PENDING_TERMINALS then
-                target.recoveryEvidenceLost = true
-                break
-            end
-            target.unidentifiedPlayback[utteranceID] = evidence
-            target.unidentifiedPlaybackCount = target.unidentifiedPlaybackCount + 1
+            RetainUnidentifiedPlayback(target, utteranceID, evidence)
         end
     end
 end
@@ -83,6 +100,7 @@ local function ArchiveSplitSession(self, session)
         createdAt = session.createdAt, endedAt = session.endedAt,
         endReason = session.endReason, stopReason = session.stopReason, stoppedAt = session.stoppedAt,
         replacedBy = session.replacedBy,
+        source = session.source, stopTrigger = session.stopTrigger,
         emergencyRecoveryAttempted = session.emergencyRecoveryAttempted,
         emergencyRecoveryAt = session.emergencyRecoveryAt,
         emergencyRecoveryResult = session.emergencyRecoveryResult,
@@ -338,7 +356,12 @@ local function RememberCancelledSession(self, session)
         and { id = session.id, pendingTokens = pendingTokens } or nil
 end
 
-function TTS:Stop(reason, replacedBy)
+function TTS:Stop(reason, replacedBy, diagnosticTrigger)
+    -- Notify before native code can reenter, including when no session exists yet.
+    if type(self.onStopRequested) == "function" then
+        local ok, message = pcall(self.onStopRequested, reason, replacedBy, diagnosticTrigger)
+        if not ok then OutLoud:Error("TTS stop observer failed:", tostring(message)) end
+    end
     local session = self.CurrentSession
 
     if not session then
@@ -348,6 +371,7 @@ function TTS:Stop(reason, replacedBy)
     session.cancelled = true
     session.state = session.failed and "failed" or "cancelled"
     session.stopReason = reason or "manual"
+    session.stopTrigger = diagnosticTrigger or session.stopReason
     session.stoppedAt, session.endedAt = Now(), Now()
     session.endReason = session.failed and "failed" or "cancelled"
     session.replacedBy = replacedBy
@@ -369,7 +393,8 @@ function TTS:Stop(reason, replacedBy)
         ArchiveSplitSession(self, session)
     end
     Record("session-" .. session.state, session.id, nil, nil, nil,
-        "reason=" .. session.stopReason .. " replacement=" .. tostring(replacedBy or "-"))
+        "reason=" .. session.stopReason .. " replacement=" .. tostring(replacedBy or "-")
+        .. " source=" .. session.source .. " trigger=" .. session.stopTrigger)
     if replacedBy then Record("session-replaced", session.id, nil, nil, nil, "new=" .. replacedBy) end
     OutLoud:Debug("TTS stopping session:", session.id)
     StopPlayback(self, session.stopReason, session)
@@ -379,7 +404,7 @@ function TTS:Stop(reason, replacedBy)
     return true
 end
 
-function TTS:StartSession(mode, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
+function TTS:StartSession(mode, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
     self:Initialize()
     -- Reserve this request's identity before callbacks can request newer narration.
     self.SessionID = self.SessionID + 1
@@ -389,6 +414,7 @@ function TTS:StartSession(mode, voiceID, onSessionEnded, onPlaybackStarted, onTe
         mode = mode,
         voiceID = voiceID,
         state = "active",
+        source = type(diagnosticSource) == "string" and diagnosticSource or "Direct TTS",
         createdAt = Now(),
         utterances = {},
         completedTokens = {},
@@ -405,8 +431,8 @@ function TTS:StartSession(mode, voiceID, onSessionEnded, onPlaybackStarted, onTe
     -- Metadata only in Full mode; its playback handling/recovery policy is unchanged.
     session.unidentifiedPlayback, session.unidentifiedPlaybackCount = {}, 0
 
-    Record("session-created", session.id, nil, nil, nil, "mode=" .. mode)
-    self:Stop("replaced", session.id)
+    Record("session-created", session.id, nil, nil, nil, "mode=" .. mode .. " source=" .. session.source)
+    self:Stop("replaced", session.id, "replacement:" .. session.source)
     if self.SessionID ~= session.id then
         session.cancelled, session.state, session.stopReason = true, "cancelled", "superseded-during-replacement"
         session.endReason, session.endedAt = "cancelled", Now()
@@ -512,7 +538,7 @@ function TTS:SubmitChunk(session, chunk)
     return self:SubmitText(session, sentence, chunk)
 end
 
-function TTS:SpeakStreaming(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
+function TTS:SpeakStreaming(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
     local valid, reason = ValidInput(text, voiceID)
 
     if not valid then
@@ -537,7 +563,7 @@ function TTS:SpeakStreaming(text, voiceID, onSessionEnded, onPlaybackStarted, on
         return false, "invalid-text"
     end
 
-    local session = self:StartSession(self.ReadingModes.SPLIT, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
+    local session = self:StartSession(self.ReadingModes.SPLIT, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
     if self.CurrentSession ~= session then return false, "session-replaced" end
     session.sentences = sentences
     session.speechSentences = speechSentences
@@ -555,7 +581,7 @@ function TTS:SpeakStreaming(text, voiceID, onSessionEnded, onPlaybackStarted, on
     return self:SubmitChunk(session, 1)
 end
 
-function TTS:SpeakWholeText(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
+function TTS:SpeakWholeText(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
     local valid, reason = ValidInput(text, voiceID)
 
     if not valid then
@@ -567,18 +593,18 @@ function TTS:SpeakWholeText(text, voiceID, onSessionEnded, onPlaybackStarted, on
         return false, "invalid-text"
     end
 
-    local session = self:StartSession(self.ReadingModes.FULL, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
+    local session = self:StartSession(self.ReadingModes.FULL, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
     if self.CurrentSession ~= session then return false, "session-replaced" end
     session.text = text
     return self:SubmitText(session, speechText)
 end
 
-function TTS:Speak(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
-    if OutLoud.Database:GetReadingMode() == self.ReadingModes.SPLIT then
-        return self:SpeakStreaming(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
+function TTS:Speak(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource, readingMode)
+    if (readingMode or OutLoud.Database:GetReadingMode()) == self.ReadingModes.SPLIT then
+        return self:SpeakStreaming(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
     end
 
-    return self:SpeakWholeText(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress)
+    return self:SpeakWholeText(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
 end
 
 function TTS:GetBookmarkSession(sessionID, token, allowStop)
@@ -674,16 +700,19 @@ end
 
 local function ClearUnidentifiedPlayback(session, utteranceID)
     if session and session.unidentifiedPlayback and session.unidentifiedPlayback[utteranceID] then
+        local evidence = session.unidentifiedPlayback[utteranceID]
         session.unidentifiedPlayback[utteranceID] = nil
-        session.unidentifiedPlaybackCount = session.unidentifiedPlaybackCount - 1
+        if not evidence.terminal then session.unidentifiedPlaybackCount = session.unidentifiedPlaybackCount - 1 end
     end
 end
 
-local function TrackUnidentifiedPlayback(self, event, utteranceID)
+local function TrackUnidentifiedPlayback(self, event, utteranceID, status)
     local session = self.CurrentSession
-    if session and session.mode ~= self.ReadingModes.SPLIT then return end
     local buffer = session or self.IdleSplitEvents
     if not buffer then return end
+    -- Full does not collect new IDs; only update Split evidence carried into it.
+    if session and session.mode ~= self.ReadingModes.SPLIT
+        and not buffer.unidentifiedPlayback[utteranceID] then return end
     if type(utteranceID) ~= "number" or utteranceID ~= utteranceID then
         buffer.recoveryEvidenceLost = true
         return
@@ -691,17 +720,28 @@ local function TrackUnidentifiedPlayback(self, event, utteranceID)
     local owner, conflict = FindSplitOwner(self, utteranceID)
     if conflict or (owner and owner.ambiguous) then
         buffer.recoveryOwnershipAmbiguous = true
-    elseif owner then
+    elseif owner or (session and session.mode == self.ReadingModes.FULL and session.utterances[utteranceID]) then
         ClearUnidentifiedPlayback(buffer, utteranceID)
-    elseif not buffer.unidentifiedPlayback[utteranceID] then
-        if buffer.unidentifiedPlaybackCount >= MAX_PENDING_TERMINALS then
-            -- Eviction must never turn incomplete evidence into recovery permission.
-            buffer.recoveryEvidenceLost = true
-            return
-        end
-        buffer.unidentifiedPlayback[utteranceID] = { event = event, at = Now() }
-        buffer.unidentifiedPlaybackCount = buffer.unidentifiedPlaybackCount + 1
+        return
     end
+    local terminal = event == "VOICE_CHAT_TTS_PLAYBACK_FINISHED" and "finished"
+        or (event == "VOICE_CHAT_TTS_PLAYBACK_FAILED" and "failed")
+    local now = Now()
+    local evidence = buffer.unidentifiedPlayback[utteranceID]
+    if not evidence then
+        evidence = { utteranceID = utteranceID, event = event, at = now,
+            firstEvent = event, firstAt = now, lastEvent = event, lastAt = now,
+            terminal = terminal, terminalAt = terminal and now or nil,
+            observedSessionID = session and session.id, observedSource = session and session.source }
+        if not RetainUnidentifiedPlayback(buffer, utteranceID, evidence) then return end
+    elseif terminal and not evidence.terminal then
+        evidence.terminal, evidence.terminalAt = terminal, now
+        buffer.unidentifiedPlaybackCount = buffer.unidentifiedPlaybackCount - 1
+    end
+    -- Delayed/duplicate nonterminal events do not reopen a retained terminal ID.
+    evidence.lastEvent, evidence.lastAt = event, now
+    if event == "VOICE_CHAT_TTS_PLAYBACK_STARTED" then evidence.startedAt = evidence.startedAt or now end
+    if terminal == "failed" and type(status) == "number" then evidence.status = status end
 end
 
 function TTS:ReplayEmergencyStopEvents()
@@ -902,6 +942,20 @@ function TTS:OnSplitBookmark(sessionID, chunk, utteranceID, bookmark)
             else
                 Record("emergency-stop-skipped", session.id, chunk, attempt.id, utteranceID,
                     eligibility.reason .. " stale-session=" .. sessionID)
+                if eligibility.reason == "other-unidentified-playback" then
+                    for id, evidence in pairs(session.unidentifiedPlayback) do
+                        if not evidence.terminal then
+                            Record("emergency-stop-blocker", session.id, chunk, attempt.id, id,
+                                "state=unresolved first=" .. tostring(evidence.firstEvent or evidence.event)
+                                .. " at=" .. tostring(evidence.firstAt or evidence.at)
+                                .. " last=" .. tostring(evidence.lastEvent or evidence.event)
+                                .. " at=" .. tostring(evidence.lastAt or evidence.at)
+                                .. " observed-session=" .. tostring(evidence.observedSessionID or "-")
+                                .. " observed-source=" .. tostring(evidence.observedSource or "-")
+                                .. " source=" .. session.source)
+                        end
+                    end
+                end
             end
         end
         if not self.Stopping then
@@ -1068,7 +1122,7 @@ function TTS:OnEvent(event, utteranceID, bookmark)
 end
 
 function TTS:DispatchPlaybackEvent(event, utteranceID, bookmark)
-    if event:match("^VOICE_CHAT_TTS_PLAYBACK_") then TrackUnidentifiedPlayback(self, event, utteranceID) end
+    if event:match("^VOICE_CHAT_TTS_PLAYBACK_") then TrackUnidentifiedPlayback(self, event, utteranceID, bookmark) end
     if event == "PLAYER_LOGOUT" then
         -- Also emitted when /reload tears down the current UI.
         self:Stop("logout")
