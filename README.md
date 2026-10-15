@@ -1,7 +1,8 @@
 # Out Loud
 
 Out Loud is a World of Warcraft: Forever addon in development for reading quest
-and NPC gossip text aloud with configurable voices.
+and NPC gossip text, books, letters, scrolls, and other readable items aloud with
+configurable voices.
 
 ## Overview
 
@@ -11,7 +12,7 @@ while speech is generated and played.
 
 Manual Out Loud buttons connect current quest and gossip dialogue to the NPC's voice, or
 selected Quest Log descriptions to the player's voice, Talking Head, and speech.
-QuestFrame narration can also start automatically when enabled in Options;
+QuestFrame and readable-item narration can also start automatically when enabled in Options;
 Quest Log and gossip narration remain manual. Talking Head closes when narration ends,
 and the loading spinner clears when owned playback begins.
 
@@ -41,6 +42,10 @@ and the loading spinner clears when owned playback begins.
   It reads the current NPC greeting, excluding options and quest lists. Single
   Voice shows the player portrait with the NPC name; Multiple Voices uses the NPC
   portrait and family/gender voice, with the existing player narrator fallback.
+- An **Out Loud** button near the bottom-right of readable item pages. It uses
+  the player's configured voice and reads from the displayed page onward. Each
+  page finishes before the addon turns to the next; manual Next/Prev navigation
+  switches narration to the selected page. Closing the item stops its narration.
 
 ## How Voice Selection Works
 
@@ -48,7 +53,7 @@ and the loading spinner clears when owned playback begins.
 and Quest Log narration. Talking Head shows the player model, with the quest
 title for quest sources and the NPC name for gossip. An unset or unavailable narrator voice stops narration
 with an error. Quest Log also shows the player model and quest title when using
-Multiple Voices.
+Multiple Voices. Readable items always show the player model and item title.
 
 **Multiple Voices** is the default and preserves the existing resolution and
 player fallback. The resolver reads two independent properties of the NPC:
@@ -102,12 +107,13 @@ dialogue and voice; later quest navigation does not cancel it. Speech is submitt
 immediately when Talking Head starts opening. Clicking again stops speech
 immediately, finishes closing, then opens the latest requested dialogue.
 
-Enable **Automatically read quest text** in the same section to start narration
-when quest details, progress, or reward pages open. It defaults to off and does
-not apply to Quest Log or gossip. **Automatic narration delay** waits 2 seconds by default,
-adjustable from 0 to 5 seconds in 0.5-second steps. The delay control is available
-when automatic narration is enabled. Manual requests skip this configurable delay
-and use the same Talking Head opening/closing lifecycle.
+Enable **Automatically read quest and item text** in the same section to start
+narration when quest details, progress, reward pages, or readable items open. It
+defaults to off and does not apply to Quest Log or gossip. **Automatic narration
+delay** waits before automatically opening Talking Head for quests and readable
+items, starting when their text is ready. It defaults to 2 seconds, adjustable
+from 0 to 5 seconds in 0.5-second steps. Manual requests skip this delay; item page
+continuation adds no extra delay. All use the same Talking Head opening/closing lifecycle.
 
 **Speech Rate** adjusts narration speed from -10 (Slower) to +10 (Faster) in
 integer steps. The default is 0 (Normal), restored with **Reset to 0**. It is
@@ -118,7 +124,10 @@ requests without restarting current playback.
 
 The mappings, saved voice configuration, voice resolver, Talking Head UI, TTS
 controller, manual QuestFrame, Quest Log and GossipFrame narration, and optional automatic
-QuestFrame narration are implemented.
+QuestFrame narration are implemented. Readable-item narration is also integrated;
+its button placement, native navigation hooks, and page-to-page audio lifecycle
+still require in-game verification. The underlying ItemText APIs have been
+verified by the user with single-page items and an eight-page book.
 The user has manually tested the current snapshot-based Talking Head lifecycle
 successfully in WoW: Forever. The subsequent immediate opening-start submission
 and synchronized scrollbar fading still require targeted in-game verification. The dialogue text APIs and NPC voice resolver also have user-reported

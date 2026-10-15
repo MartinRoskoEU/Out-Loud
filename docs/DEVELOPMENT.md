@@ -450,6 +450,11 @@ Standalone Lua 5.1 checks under `Tests/` include:
   saved-value checks. Small supplied unit/model/voice inputs isolate selection
   decisions. It loads no UI, creates no frames, delivers no events, and does not
   verify model loading, native voice availability or WoW SavedVariables persistence.
+- `Tests/ItemText.lua` checks page identity, readiness predicates, manual navigation,
+  sequential continuation, shared automatic activation scheduling/cancellation and
+  markup normalization with supplied scalar
+  page data and call-recording doubles. It does not initialize native UI or simulate
+  page loading, events, timers, or audio.
 - `Tests/Narration.lua` checks immediate opening-callback submission, duplicate
   protection, presentation ownership predicates and callback isolation using supplied
   coordinator state and call-recording doubles. It does not load Talking Head or
@@ -467,7 +472,7 @@ verification.
 
 If execution is explicitly approved, run only the requested file from the addon
 root, for example `lua Tests/VoiceSelection.lua`, `lua Tests/TTS.lua`, or
-`lua Tests/Narration.lua`. Do not add
+`lua Tests/Narration.lua` or `lua Tests/ItemText.lua`. Do not add
 replacement tests to maintain counts or coverage. A logic-check result must be
 reported separately from actual in-game verification.
 
@@ -657,6 +662,101 @@ scenario has an individual recorded client test.
 Native queue removal, stale playback, newer-speech survival after Emergency STOP,
 all timer/event edge cases and every NPC appearance are not exhaustively verified.
 
+### Readable-item narration
+
+`UI/ItemTextIntegration.lua` uses the existing ItemTextFrame and the player's
+`VoiceSelection:ResolvePlayer()` configuration, including Single Voice mode.
+It registers in the TOC and `Core/Init.lua`, with the existing ADDON_LOADED retry
+pattern if Blizzard's UI is not available yet. Its 100 by 22 `UIPanelButtonTemplate`
+button anchors to the bottom-right of `ItemTextScrollFrame`, outside the scrolling
+content. The native frame's OnEvent post-hook captures text after Blizzard handles
+`ITEM_TEXT_READY`. BEGIN establishes a fresh item identity, even for identical
+titles; CLOSED and OnHide invalidate that identity and stop only owned item speech.
+
+The user verified `ItemTextGetItem`, `ItemTextGetPage`, `ItemTextGetText`,
+`ItemTextHasNextPage`, `ItemTextNextPage`, and `ITEM_TEXT_READY` in Forever.
+Tainted Scroll and Hallowed Sigil returned title/text; an eight-page test of
+The Old Gods and the Ordering of Azeroth retrieved all 2,570 characters without
+skips in about 1.94 seconds. That test collected pages asynchronously; production
+never preloads a book and does not use its `_G.OutLoudBookPageTest.fullText` result.
+
+The existing `OutLoudDB.autoNarrateQuests` boolean also enables readable-item
+Auto Play. No settings key is added or renamed. The label now mentions quest and
+item text. Automatic items wait for `Database:GetAutoNarrationDelay()` after the
+first displayed page becomes ready, before opening Talking Head. Quest and item
+activation share `Narration:ScheduleAutoNarration(owner, request, isCurrent, start)`
+and `CancelAutoNarration(owner)`, extracted from the existing quest timer path.
+Each owner retains `PendingAutoNarration`; only the shared helper creates/cancels
+the activation timer. The callback requires the same pending request, Auto Play
+still enabled, and the integration's current-page/quest predicate before starting.
+A zero delay activates immediately. Manual Out Loud activation and manual page
+navigation cancel pending automatic activation and remain immediate once text is
+ready. Page continuation does not add an activation delay between pages, and
+sentence prefetch remains timer-free.
+
+With Auto Play off, navigation remains silent until the player activates Out Loud.
+After activation, both manual and automatic reads continue through remaining pages.
+Disabling Auto Play, STOP, closing, changing items/pages or another narration
+source cancels pending activation; stale callbacks cannot open Talking Head. An
+accepted reading session still uses the existing STOP and page lifecycle.
+
+Each page is a separate shared Narration request, with the item title and player
+portrait. `Narration:Speak` accepts an optional seventh argument,
+`onRequestEnded(reason, requestID)`. It is called once, with callback ownership
+cleared before invocation. Natural completion begins Talking Head closing before
+calling it; cancellation, failed submission, and replacement also notify pending
+requests that never acquired a TTS session. A reentrant replacement callback cannot
+make the superseded request stop a newer one.
+
+Only `reason == "finished"` authorizes the next page. This comes from the existing
+Split Text final owned utterance completion, never submission return, a start
+bookmark, a timer or an estimated duration. The integration then checks the current
+item/page identity and `ItemTextHasNextPage`, records the expected next page before
+calling `ItemTextNextPage`, and waits for matching `ITEM_TEXT_READY`. There is no
+page queue or native speech retry. The existing close-then-open sequence and TTS
+queue/STOP safeguards remain in their own modules.
+
+Native Next/Prev buttons use PreClick hooks, so active page narration stops before
+Blizzard's OnClick runs. Optional gamepad page buttons receive the same hooks.
+Automatic turns call the verified page API directly and do not trigger those input
+hooks. The latest expected page replaces older pending navigation. Readiness also
+detects a changed displayed page reached outside those buttons. Duplicate ready
+notifications and old completion callbacks cannot repeat a submission or page turn.
+On a stopped read, later readiness updates the button but does not reactivate it.
+STOP or replacement before initial readiness also cancels the pending Auto Play
+activation; it does not require a TTS session to exist.
+Hooks on shared Narration and direct TTS entry/stop paths invalidate pending page
+continuations when another source takes ownership, including between pages when
+no TTS session exists. Own startup is recognized both during the immediate
+`StartPage` call and during a later `Narration.Submit`: the coordinator's live
+`Submitting` request must own the current page's request-end callback. This keeps
+`Stop("replaced")` and `StartSession` notifications from cancelling continuation
+when manual navigation waits for Talking Head to finish closing. Explicit STOP
+still cancels, including while a page is submitting or awaiting readiness.
+Closing ItemTextFrame stops only its owned request and leaves unrelated narration
+alone. A page request already sent to Blizzard cannot be withdrawn; cancellation invalidates its narration continuation.
+
+SimpleHTML layout tags are removed from the page payload and common named HTML
+entities are decoded. The original API text is retained only for current-page
+identity checks. Empty pages or unavailable player voices stop without guessing
+speech completion or automatically skipping unread content.
+
+Standalone checks cover addon state and supplied API values only. The user's API
+tests do not establish this integration's hooks, event ordering, UI placement or
+audible completion behavior. Verify in Forever:
+
+- Single-page scrolls/letters and the eight-page book, with Auto Play both on and off.
+- Configured delays 0, 2 and 5: Talking Head opens only after automatic activation;
+  STOP, close, manual activation and navigation during the wait prevent duplicates.
+- Activation from a middle page; no page advance until the last spoken segment ends.
+- Next/Prev during playback, repeated navigation while waiting, and fitting versus
+  overflowing item layouts, including ParchmentLarge.
+- STOP/close and another narration source during speech, Closing and pending page
+  loading; delayed READY must not revive a cancelled read.
+- Switching items, including equal titles; reopening, reload, voice failure, and
+  any gamepad navigation/binding paths in use. PreClick/event behavior and actual
+  native audio cancellation still need client verification.
+
 ### Automatic QuestFrame narration
 
 `OutLoudDB.autoNarrateQuests` defaults to `false` when absent; existing saved
@@ -670,7 +770,7 @@ step; invalid values use the default. Valid existing values are preserved.
 `Database.AutoNarrationDelay` supplies the shared default, bounds, and step.
 
 The Settings section is labelled **Narration** and starts with the
-**Automatically read quest text** checkbox, followed by automatic delay and speech
+**Automatically read quest and item text** checkbox, followed by automatic delay and speech
 rate controls. It has no reading-mode selector or redundant single-choice control.
 The checkbox uses
 `SettingsCheckboxTemplate`, `SettingsCheckboxMixin:Init()`, and its
@@ -727,7 +827,8 @@ These events were verified in-game by the user. The local shared
 the panels' `OnShow` handlers hide the previous panels before the post-hook runs.
 When enabled, the event hook calls `ScheduleAutoNarration(event)`. A zero delay
 calls `StartCurrentNarration()` immediately; other values create one cancellable
-`C_Timer.NewTimer()` in `QuestIntegration.PendingAutoNarration`. The request
+`C_Timer.NewTimer()` through the shared Narration activation helper, with the
+request still held in `QuestIntegration.PendingAutoNarration`. The request
 captures `GetQuestID()`, the current text, and its source. Before reading, the
 callback checks that this is still the pending request, automatic narration is
 enabled, and the same quest/page/text is still available. It then calls the same

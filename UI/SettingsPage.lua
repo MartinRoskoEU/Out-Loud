@@ -3,9 +3,9 @@ local AddonName, OutLoud = ...
 local SettingsPage = {}
 OutLoud.UI.SettingsPage = SettingsPage
 
-local AUTO_NARRATION_LABEL = "Automatically read quest text"
-local AUTO_NARRATION_DESCRIPTION = "Automatically starts narration when opening quest details, quest progress, or quest reward pages. Quest Log narration remains manual."
-local AUTO_DELAY_DESCRIPTION = "Waits before automatically starting quest narration, allowing existing NPC dialogue to finish first. This delay does not affect manual narration."
+local AUTO_NARRATION_LABEL = "Automatically read quest and item text"
+local AUTO_NARRATION_DESCRIPTION = "Automatically starts narration when opening quest details, quest progress, quest reward pages, or readable items. Readable items continue page by page. Quest Log and gossip narration remain manual."
+local AUTO_DELAY_DESCRIPTION = "Waits before automatically starting quest or readable-item narration, allowing existing dialogue to finish first. This delay does not affect manual narration or continuation between item pages."
 
 local VOICES_LAYOUT = {
     -- Align family labels with the radio descriptions and narrator controls.

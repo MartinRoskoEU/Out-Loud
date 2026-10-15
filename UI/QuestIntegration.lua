@@ -105,12 +105,7 @@ function QuestIntegration:UpdateButtonVisibility()
 end
 
 function QuestIntegration:CancelPendingAutoNarration()
-    local request = self.PendingAutoNarration
-    self.PendingAutoNarration = nil
-    if request and request.timer then
-        request.timer:Cancel()
-        request.timer = nil
-    end
+    OutLoud.Narration:CancelAutoNarration(self)
 end
 
 function QuestIntegration:IsAutoNarrationCurrent(request)
@@ -128,22 +123,10 @@ function QuestIntegration:ScheduleAutoNarration(event)
     local text, _, textSource = self:GetCurrentText()
     if not text or textSource ~= autoNarrationEvents[event] then return end
 
-    local delay = OutLoud.Database:GetAutoNarrationDelay()
-    if delay == 0 then
-        self:StartCurrentNarration()
-        return
-    end
-
     local request = { questID = GetQuestID(), text = text, textSource = textSource }
-    self.PendingAutoNarration = request
-    request.timer = C_Timer.NewTimer(delay, function()
-        if self.PendingAutoNarration ~= request then return end
-        request.timer = nil
-        self.PendingAutoNarration = nil
-        if self:IsAutoNarrationCurrent(request) then
-            self:StartCurrentNarration()
-        end
-    end)
+    OutLoud.Narration:ScheduleAutoNarration(self, request,
+        function(pending) return self:IsAutoNarrationCurrent(pending) end,
+        function() self:StartCurrentNarration() end)
 end
 
 function QuestIntegration:StartCurrentNarration()

@@ -11,10 +11,22 @@ local function Record(event, request, detail)
     end
 end
 
+local function NotifyRequestEnded(request, reason)
+    if not request or request.ended then return end
+    request.ended = true
+    local callback = request.onRequestEnded
+    request.onRequestEnded = nil
+    if type(callback) == "function" then
+        local ok, message = pcall(callback, reason, request.id)
+        if not ok then OutLoud:Error("Narration request-end callback failed:", tostring(message)) end
+    end
+end
+
 local function CancelRequest(self, reason)
     local request = self.Narration
     self.Narration = nil
     Record("narration-cancelled", request, reason or "manual")
+    NotifyRequestEnded(request, reason or "manual")
 end
 
 local function OwnsPresentation(self, request, transition)
@@ -22,6 +34,34 @@ local function OwnsPresentation(self, request, transition)
     return self.Narration == request and talkingHead.Transition == transition
         and (talkingHead.State == "Opening" or talkingHead.State == "Opened")
         and talkingHead.Frame:IsShown()
+end
+
+function Narration:CancelAutoNarration(owner)
+    local request = owner.PendingAutoNarration
+    owner.PendingAutoNarration = nil
+    if request and request.timer then
+        request.timer:Cancel()
+        request.timer = nil
+    end
+end
+
+-- Shared activation delay; speech still submits immediately at opening start.
+-- Each integration retains its source-specific readiness/identity predicate.
+function Narration:ScheduleAutoNarration(owner, request, isCurrent, start)
+    self:CancelAutoNarration(owner)
+    if not OutLoud.Database:GetAutoNarrateQuests() then return end
+    local delay = OutLoud.Database:GetAutoNarrationDelay()
+    if delay == 0 then
+        if isCurrent(request) then start() end
+        return
+    end
+    owner.PendingAutoNarration = request
+    request.timer = C_Timer.NewTimer(delay, function()
+        if owner.PendingAutoNarration ~= request then return end
+        request.timer = nil
+        owner.PendingAutoNarration = nil
+        if OutLoud.Database:GetAutoNarrateQuests() and isCurrent(request) then start() end
+    end)
 end
 
 function Narration:Initialize()
@@ -52,6 +92,8 @@ end
 
 function Narration:Stop(reason, diagnosticTrigger)
     CancelRequest(self, reason)
+    -- A request-end callback may already have installed newer narration.
+    if self.Narration then return end
     local talkingHead = OutLoud.UI.TalkingHead
     if talkingHead.State == "Closed" or talkingHead.State == "Closing" then
         self:OnClosing(reason, diagnosticTrigger)
@@ -87,6 +129,7 @@ function Narration:Submit(request, transition)
         self.Narration = nil
         talkingHead:FinishTextPlayback(endReason)
         talkingHead:Hide(endReason)
+        NotifyRequestEnded(request, endReason)
     end, function()
         if OwnsPresentation(self, request, transition) then talkingHead:SetLoading(false) end
     end, function(spokenText, chunk, offset)
@@ -101,7 +144,7 @@ end
 
 -- Capture once; navigation cannot change an accepted narration's content.
 -- Returns acceptance; a replacement may wait for the current presentation to close.
-function Narration:Speak(unit, text, voiceID, displayTitle, diagnosticSource, modelFileID)
+function Narration:Speak(unit, text, voiceID, displayTitle, diagnosticSource, modelFileID, onRequestEnded)
     self:Initialize()
     if not unit or not UnitExists(unit) then return false, "unit-unavailable" end
     local speaker = {
@@ -115,11 +158,14 @@ function Narration:Speak(unit, text, voiceID, displayTitle, diagnosticSource, mo
     local request = {
         id = self.RequestID, speaker = speaker, text = text, voiceID = voiceID,
         source = type(diagnosticSource) == "string" and diagnosticSource or "Narration",
+        onRequestEnded = onRequestEnded,
     }
     -- Change ownership before native STOP can synchronously notify the outgoing session.
     local previous = self.Narration
     self.Narration = request
     Record("narration-cancelled", previous, "replaced")
+    NotifyRequestEnded(previous, "replaced")
+    if self.Narration ~= request then return true end
     Record("narration-requested", request, "unit=" .. unit .. " model=" .. tostring(modelFileID or "-"))
     local talkingHead = OutLoud.UI.TalkingHead
     self:OnClosing("replaced", "replacement:" .. request.source)

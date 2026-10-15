@@ -24,5 +24,6 @@ UI\TalkingHead.lua
 UI\QuestIntegration.lua
 UI\QuestLogIntegration.lua
 UI\GossipIntegration.lua
+UI\ItemTextIntegration.lua
 
 Core\Init.lua

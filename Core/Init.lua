@@ -15,6 +15,7 @@ frame:SetScript("OnEvent", function(_, event, loadedAddonName)
     OutLoud.UI.QuestIntegration:Initialize()
     OutLoud.UI.QuestLogIntegration:Initialize()
     OutLoud.UI.GossipIntegration:Initialize()
+    OutLoud.UI.ItemTextIntegration:Initialize()
 
     OutLoud.Loaded = true
     frame:UnregisterEvent("ADDON_LOADED")

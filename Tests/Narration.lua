@@ -37,6 +37,7 @@ local function Harness()
     setfenv(chunk, environment)
     chunk("OutLoud", addon)
     test.head, test.addon, test.narration = head, addon, addon.Narration
+    test.environment = environment
     test.request = { id = 1, speaker = {}, text = "First. Second.", voiceID = 7, source = "Quest" }
     test.narration.Narration = test.request
     return test
@@ -126,6 +127,62 @@ Test("Presentation callbacks remain guarded after immediate submission", functio
     Equal(test.progress, "First.")
     Equal(test.hidden, 0)
     Equal(test.finished, nil)
+end)
+
+Test("Request completion notifies once after presentation cleanup", function()
+    local test = Harness()
+    local transition, ended = {}, 0
+    test.head.State, test.head.Transition = "Opening", transition
+    test.request.onRequestEnded = function(reason, requestID)
+        Equal(reason, "finished")
+        Equal(requestID, test.request.id)
+        Equal(test.hidden, 1, "Begin closing before invoking the continuation")
+        Equal(test.narration.Narration, nil)
+        ended = ended + 1
+    end
+    test.narration:Submit(test.request, transition)
+    test.calls[1][3]("finished")
+    test.calls[1][3]("finished")
+    Equal(ended, 1)
+    Equal(test.request.onRequestEnded, nil, "Release callback ownership")
+end)
+
+Test("Stopping a pending request notifies cancellation once", function()
+    local test = Harness()
+    local ended = 0
+    test.head.State = "Opening"
+    test.request.onRequestEnded = function(reason)
+        Equal(reason, "manual")
+        ended = ended + 1
+    end
+    test.narration:Stop("manual")
+    test.narration:Stop("manual")
+    Equal(ended, 1)
+    Equal(test.request.ended, true)
+end)
+
+Test("A reentrant request-end replacement keeps the newest request", function()
+    for _, action in ipairs({ "replace", "stop" }) do
+        local test = Harness()
+        local stops = 0
+        test.environment.UnitExists = function() return true end
+        test.environment.UnitName = function() return "Player" end
+        test.environment.UnitFactionGroup = function() return "Alliance" end
+        function test.head:Initialize() end
+        function test.addon.TTS:Stop() stops = stops + 1 end
+        test.request.onRequestEnded = function()
+            test.narration:Speak("player", "Newest.", 7)
+        end
+        if action == "replace" then
+            test.narration:Speak("player", "Superseded.", 7)
+        else
+            test.narration:Stop("manual")
+        end
+        Equal(test.narration.Narration.text, "Newest.")
+        Equal(stops, 1, "Superseded outer request cannot stop the newer request")
+        Equal(#test.presentations, 1)
+        Equal(test.presentations[1][2], "Newest.")
+    end
 end)
 
 print("PASS: " .. passed .. " isolated narration coordinator checks; native UI and audio unverified")
