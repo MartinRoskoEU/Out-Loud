@@ -15,6 +15,7 @@ end
 
 -- Optional observer. Playback never reads diagnostic state.
 local function Record(event, sessionID, chunk, attemptID, utteranceID, detail)
+    if not OutLoud.DebugEnabled then return end
     local recorder = OutLoud.TTSDiagnostics
     if recorder then
         pcall(recorder.Record, recorder, event, sessionID, chunk, attemptID, utteranceID, detail)

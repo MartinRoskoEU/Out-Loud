@@ -4,6 +4,7 @@ local Narration = {}
 OutLoud.Narration = Narration
 
 local function Record(event, request, detail)
+    if not OutLoud.DebugEnabled then return end
     local recorder = OutLoud.TTSDiagnostics
     if recorder and request then
         pcall(recorder.Record, recorder, event, nil, nil, nil, nil,

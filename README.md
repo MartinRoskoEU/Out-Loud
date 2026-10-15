@@ -151,5 +151,9 @@ The addon separates voice resolution, speech, and presentation:
 
 ## Development
 
+Debug logging is off by default and resets after login or `/reload`. Use
+`/outloud debug on`, `/outloud debug off`, or `/outloud debug` to enable, disable,
+or check it for the current session. Normal errors remain visible.
+
 Implementation details, the explicit-approval testing policy, and in-game
 diagnostic helpers are documented in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).

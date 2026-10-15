@@ -1,11 +1,12 @@
 local AddonName, OutLoud = ...
 
--- Temporary observer: remove this file and its TOC entry after manual testing.
+-- Optional debug observer, retained for native TTS investigations.
 -- No controller decision depends on this recorder or report.
 local Diagnostics = { limit = 200, entries = {}, count = 0, nextEntry = 1, sequence = 0 }
 OutLoud.TTSDiagnostics = Diagnostics
 
 function Diagnostics:Record(event, sessionID, chunk, attemptID, utteranceID, detail)
+    if not OutLoud.DebugEnabled then return end
     self.sequence = self.sequence + 1
     self.entries[self.nextEntry] = {
         sequence = self.sequence, at = GetTime and GetTime() or 0,

@@ -17,6 +17,25 @@ function OutLoud:Debug(...)
     end
 end
 
+function OutLoud:HandleSlashCommand(message)
+    local command, value = (message or ""):lower():match("^%s*(%S+)%s*(.-)%s*$")
+    if command ~= "debug" or (value ~= "" and value ~= "on" and value ~= "off") then
+        print("[Out Loud] Usage: /outloud debug [on|off]")
+        return
+    end
+    if value == "on" then
+        self.DebugEnabled = true
+    elseif value == "off" then
+        self.DebugEnabled = false
+    end
+    print("[Out Loud] Debug logging " .. (self.DebugEnabled and "enabled." or "disabled."))
+end
+
+function OutLoud:RegisterSlashCommands()
+    _G.SLASH_OUTLOUD1 = "/outloud"
+    SlashCmdList.OUTLOUD = function(message) self:HandleSlashCommand(message) end
+end
+
 function OutLoud:Error(...)
     local parts = {}
     for i = 1, select("#", ...) do

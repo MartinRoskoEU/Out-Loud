@@ -8,6 +8,7 @@ frame:SetScript("OnEvent", function(_, event, loadedAddonName)
         return
     end
 
+    OutLoud:RegisterSlashCommands()
     OutLoud.Database:Initialize()
     OutLoud.VoiceSelection:Initialize()
     OutLoud.UI.SettingsPage:Initialize()

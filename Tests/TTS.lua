@@ -175,6 +175,7 @@ end
 
 Test("Observed cancelled prefetch requests one Emergency STOP without resubmission", function()
     local test = Harness()
+    test.addon.DebugEnabled = true
     test.tts:SpeakStreaming(text, 7)
     local old = test.tts.CurrentSession
     test:Bookmark(1, 101)
@@ -1056,6 +1057,7 @@ end)
 
 Test("Idle diagnostics retain terminal records and distinguish blockers and cancellation source", function()
     local test = Harness()
+    test.addon.DebugEnabled = true
     test.tts:SpeakStreaming(text, 7, nil, nil, nil, "Quest")
     test:Bookmark(1, 101)
     test:Bookmark(2, 102)
@@ -1328,6 +1330,7 @@ end)
 
 Test("Diagnostics return one bounded text-free report and do not drive playback", function()
     local test = Harness()
+    test.addon.DebugEnabled = true
     assert(test.addon.GetTTSReport():find("Current: idle", 1, true), "Reporting before TTS initialization is safe")
     local private = "Unique private quest narration."
     test.tts:SpeakStreaming(private, 7)
@@ -1346,13 +1349,14 @@ Test("Diagnostics return one bounded text-free report and do not drive playback"
     Equal(test.stops, 0)
     Equal(test.addon.TTSDiagnostics.count, 200)
     Equal(#test.addon.TTSDiagnostics.entries, 200)
+    local chatCount = #test.diagnostics
     local report = test.environment._G.OutLoud.GetTTSReport()
     Equal(type(report), "string")
     Equal(report:find(private, 1, true), nil)
     assert(report:find("waiting-unconfirmed", 1, true))
     assert(report:find("1000.000 event-FINISHED", 1, true))
     Equal(report:find("#1 ", 1, true), nil, "Old events are discarded")
-    Equal(#test.diagnostics, 0, "Obtaining a report never prints to chat")
+    Equal(#test.diagnostics, chatCount, "Obtaining a report never prints to chat")
 
     test = Harness(true)
     Equal(test.addon.TTSDiagnostics, nil)
@@ -1365,12 +1369,42 @@ Test("Diagnostics return one bounded text-free report and do not drive playback"
     Equal(#test.calls, 2)
 
     test = Harness()
+    test.addon.DebugEnabled = true
     test.addon.TTSDiagnostics.Record = function() error("Broken optional observer") end
     test.tts:SpeakStreaming("Only.", 7)
     local current = test.tts.CurrentSession
     test:Bookmark(1, 101)
     test:Event("FINISHED", 101)
     Equal(current.state, "completed", "Observer errors cannot alter controller decisions")
+end)
+
+Test("Debug-off playback makes no observer calls or chat messages", function()
+    local test = Harness()
+    local recorder, observed = test.addon.TTSDiagnostics, 0
+    local originalRecord = recorder.Record
+    recorder.Record = function(self, ...)
+        observed = observed + 1
+        return originalRecord(self, ...)
+    end
+    Equal(test.addon.DebugEnabled, false)
+    test.tts:SpeakStreaming(text, 7)
+    test:Bookmark(1, 101)
+    Equal(#test.calls, 2, "Debug-off preserves one-ahead submission")
+    Equal(observed, 0)
+    Equal(recorder.count, 0)
+    Equal(#test.diagnostics, 0)
+    test.addon.DebugEnabled = true
+    test:Bookmark(2, 102)
+    assert(observed > 0 and recorder.count > 0)
+    test.addon.DebugEnabled = false
+    local count, sequence, chats, calls = recorder.count, recorder.sequence, #test.diagnostics, observed
+    test.tts:Stop()
+    test:Bookmark(3, 103)
+    Equal(test.stops, 2, "Disabling diagnostics preserves stale-playback STOP protection")
+    Equal(observed, calls)
+    Equal(recorder.count, count)
+    Equal(recorder.sequence, sequence)
+    Equal(#test.diagnostics, chats)
 end)
 
 Test("A failed Split native stop retains uncertainty and allows a new session", function()

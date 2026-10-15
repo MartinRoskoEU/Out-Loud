@@ -366,11 +366,14 @@ inputs check defensive Lua behavior, not native event ordering or playback timin
 
 `Core/TTSDiagnostics.lua` is a retained observer loaded immediately before TTS.
 Keep it and its TOC entry unless the user explicitly approves removal. Successful
-lifecycle testing does not retire the ongoing native TTS investigation. Historical
-temporary/removal wording in the runtime comment is not a removal instruction;
-that comment is left untouched by this documentation/test cleanup.
-It keeps the latest 200 timestamped events in a ring buffer, plus formats bounded
-current/retired state snapshots. The recorder uses IDs and decisions, never quest
+lifecycle testing does not retire the ongoing native TTS investigation.
+It records the latest 200 timestamped events in a ring buffer only while debug
+logging is enabled, and formats bounded current/retired state snapshots. Both the
+TTS/Narration observer calls and the recorder itself return immediately when
+`OutLoud.DebugEnabled` is false. Disabling debug stops new recording and chat
+messages; already recorded events remain available until reload. Runtime attempt,
+ownership, cancellation and history state remain active because playback safeguards
+use them independently of diagnostic logging. The recorder uses IDs and decisions, never quest
 text or callbacks, and prints nothing. Times use the client `GetTime()` timebase.
 Unidentified snapshots include idle controller state, native IDs, first/last events
 and times, observed terminal/status, and the controller session/source at first
@@ -446,6 +449,9 @@ runtime evidence.
 
 Standalone Lua 5.1 checks under `Tests/` include:
 
+- `Tests/Debug.lua` checks native registration table values, command parsing,
+  chat/recorder gating, error visibility and session-only initialization using
+  supplied tables and print capture. It does not simulate native slash dispatch.
 - `Tests/VoiceSelection.lua` retains existing generated-catalog, resolver and
   saved-value checks. Small supplied unit/model/voice inputs isolate selection
   decisions. It loads no UI, creates no frames, delivers no events, and does not
@@ -472,7 +478,7 @@ verification.
 
 If execution is explicitly approved, run only the requested file from the addon
 root, for example `lua Tests/VoiceSelection.lua`, `lua Tests/TTS.lua`, or
-`lua Tests/Narration.lua` or `lua Tests/ItemText.lua`. Do not add
+`lua Tests/Narration.lua`, `lua Tests/ItemText.lua`, or `lua Tests/Debug.lua`. Do not add
 replacement tests to maintain counts or coverage. A logic-check result must be
 reported separately from actual in-game verification.
 
@@ -1154,15 +1160,29 @@ Normal narration is silent in chat. Failed reads, caught button errors, native
 narration normally does not print an error. Unidentified playback failures do
 not produce an error message because they may belong to unrelated TTS.
 
-Enable detailed diagnostics for the current login with this Toolbox Console command:
+Debug logging defaults to disabled at each login or `/reload`. Use the native
+slash command handler:
 
-```lua
-OutLoud.DebugEnabled = true
+```text
+/outloud debug on
+/outloud debug off
+/outloud debug
 ```
 
-These optional diagnostics include voice resolution, submission, bookmarks, and
-session state. Set the flag to `false` to disable them. It is not saved; a UI
-reload disables routine diagnostics again. Error messages remain enabled.
+The first two commands enable/disable debug and print a short confirmation; the
+last reports the current state without changing it. Unknown arguments show only
+`/outloud debug [on|off]` usage. `Core/Namespace.lua` registers the required
+`SLASH_OUTLOUD1 = "/outloud"` alias and `SlashCmdList.OUTLOUD` handler through
+`RegisterSlashCommands()`, called first in the addon's ADDON_LOADED initialization.
+The commands use the existing `OutLoud:Debug(...)` flag and add no SavedVariables.
+Status/usage replies and normal red error reporting remain visible when debug is off.
+
+Enabled diagnostics include voice resolution, submission, bookmarks, and session
+state. Enable debug before reproducing an issue to populate the diagnostic event
+buffer; reports can still show controller state independently of recorded events.
+Standalone checks validate command parsing, gating, initialization and recorder
+bounds. Actual chat slash dispatch and client reload behavior require in-game
+verification and have not been exercised by these checks.
 
 ### Blizzard source reference and verification limits
 
