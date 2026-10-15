@@ -96,9 +96,9 @@ client check; no simulated Settings environment is maintained.
 NPC and player resolution share gender naming and configured-voice lookup;
 their model/race lookups and failure reasons remain distinct. Missing or malformed
 family settings return no voice. Selecting a voice repairs that family's table
-without replacing other assignments. Reading mode is normalized to `full` or
-`split` during initialization and through database access; invalid values use the
-existing `full` default. Voice settings use only the current family-keyed schema;
+without replacing other assignments. Initialization removes the obsolete
+`OutLoudDB.readingMode` preference and preserves other saved settings. Narration
+always uses Split Text. Voice settings use only the current family-keyed schema;
 the development addon does not migrate earlier numeric race settings.
 
 ## Speech controller API
@@ -111,12 +111,8 @@ Callers supply text and an already-resolved voice ID to the `OutLoud.TTS` single
   cannot queue a sentence twice. No timers or artificial delays are used inside
   this controller path. Narration calls it after the intentional 0.5-second
   Talking Head opening-start delay.
-- `SpeakWholeText(text, voiceID)` submits the sanitized complete text in one
-  request, preceded by one ownership bookmark. It never splits or prefetches.
-- `Speak(text, voiceID)` reads the existing saved `readingMode` through the
-  database: `"split"` selects streaming and `"full"` selects whole text. The
-  default is `"full"`. Its optional seventh argument supplies a captured reading
-  mode instead; Narration uses it to preserve the accepted snapshot.
+- `Speak(text, voiceID)` forwards to `SpeakStreaming`, including callbacks and
+  the optional diagnostic source. Split Text is the only supported reading mode.
 - `Stop()` cancels active Out Loud speech. Calling it while idle leaves other
   TTS alone.
 
@@ -125,13 +121,12 @@ also replaces forbidden XML ASCII controls (`0x00`-`0x08`, `0x0B`, `0x0C`,
 `0x0E`-`0x1F`) with spaces, collapses whitespace, and trims it. Tab, LF, and CR
 continue through whitespace normalization. Punctuation and UTF-8 bytes are
 preserved. This is a control-byte filter, not a general UTF-8 validity parser.
-Both reading modes use this helper before payload construction. Speech is then
+Each sentence uses this helper before payload construction. Speech is then
 escaped for XML text (`&`, `<`, `>`) before the unchanged ownership bookmark is
 prepended, so user text and pre-encoded entities cannot introduce markup.
 The controller previously appended raw text; it had no escaping helper.
 
-Full mode retains the exact original text for display callbacks. Split mode keeps
-the existing splitter's original normalized sentences and indexes alongside
+The controller keeps the splitter's original normalized sentences and indexes alongside
 sanitized speech sentences. Empty speech sentences are skipped without queuing a
 request or accepting a bookmark for that index. Completion follows the last
 nonempty speech sentence, including when a trailing separator-only sentence was
@@ -149,7 +144,7 @@ Native stop errors are caught and printed in red, with the synchronous-event
 guard released and the session-end callback still notified. A native engine that
 rejects stopping may continue audio; Lua cleanup cannot guarantee native recovery.
 
-All three Speak methods accept an optional third argument, `onSessionEnded`.
+Both speech entry points accept an optional third argument, `onSessionEnded`.
 The controller calls `onSessionEnded(reason, sessionID)` when that session ends:
 `"finished"` after the final owned utterance, `"cancelled"` on stop/replacement,
 or `"failed"` on a native call error or owned playback failure. Callback errors
@@ -161,8 +156,7 @@ later bookmarks do not notify again. Submission return and unowned playback-star
 events do not invoke this callback. Callback errors are caught silently.
 
 An optional fifth argument, `onTextProgress(text, chunk, offset, sessionID)`,
-receives the full original text in full mode (`chunk = 0`), or the normalized
-active sentence and its index in split mode. An ownership bookmark sends offset
+receives the normalized active sentence and its index. An ownership bookmark sends offset
 0 once per active text. Callback errors are caught and printed in red.
 Speech payloads always retain the existing ownership-only format, including when
 the display callback is supplied.
@@ -171,8 +165,7 @@ Head can prepare exactly the first sentence before its entrance animation.
 
 Word-level `OUTLOUD:PROGRESS` bookmarks were removed after the user reported
 degraded speech quality. The controller adds only the original ownership bookmark
-at the start of the complete text or streamed sentence. It ignores the removed
-UI markers. Full mode still makes one native request, and streaming still
+at the start of each streamed sentence. It ignores the removed UI markers and
 prefetches one sentence ahead. A display callback cannot alter the generation text.
 
 Speak methods return `true` when submission succeeds, or `false` plus a reason:
@@ -184,7 +177,7 @@ disables Blizzard's line-separator sound once.
 
 ## Sessions, cancellation, and known limitations
 
-Both modes share cancellation and monotonically increasing session IDs. Starting
+Narration uses cancellation and monotonically increasing session IDs. Starting
 valid new speech cancels the active session before submitting immediately.
 Sessions record `state` (`active`, `completed`, `failed`, `cancelled`), creation/end
 times, stop reason, and replacement ID. A request identity is reserved before
@@ -193,9 +186,8 @@ overwritten by the enclosing request. A superseded Speak call returns
 `false, "session-replaced"`. TTS callbacks report session end, owned playback start
 and text progress. Narration guards those callbacks with request/presentation
 ownership. `Narration:Speak(unit, text, voiceID, displayTitle, diagnosticSource,
-modelFileID)` captures content; `TalkingHead:Show(speaker, text, readingMode,
-onOpening)` reports opening start with its transition identity. Opening completion
-only updates visual state. Full still uses one request and its `WHOLE` bookmark.
+modelFileID)` captures content; `TalkingHead:Show(speaker, text, onOpening)` reports
+opening start with its transition identity. Opening completion only updates visual state.
 
 Split's authoritative records live in `CurrentSession.sentenceStates[index]`:
 
@@ -233,10 +225,8 @@ can resolve an attempt without reopening the retired session.
 Empty sanitized sentences remain indexed as `skipped` and never get attempts.
 Split submission/progression decisions use sentence/attempt records. `queued` is
 a compatibility view with test readers and no production readers. It remains
-unchanged pending separate controller review. Completion tables are not uniformly
-obsolete: `completedUtterances` guards pending terminal retention, and Full mode
-uses `completedTokens` and `completedUtterances` to reject duplicate processing.
-Do not remove these safeguards as compatibility cleanup.
+unchanged pending separate controller review. `completedUtterances` still guards
+pending terminal retention. Sentence/attempt records reject duplicate progression.
 
 Ended Split sessions release display/speech text, callbacks, bindings, and pending
 event buffers. `TTS.SplitHistory` keeps compact metadata for at most eight sessions
@@ -244,7 +234,7 @@ and 128 submitted attempts, without text, callbacks or completed session objects
 Metadata eviction is loss of correlation evidence, never proof of native removal.
 Historical known utterances can still receive observations. Unowned event buffers
 are reset between controller epochs; they never carry a cached terminal into a
-new session. Full retains its existing ephemeral session and cancellation summary.
+new session.
 
 `Stop()` retains the existing `TTS.CancelledSession` stop-authorization summary:
 only the latest cancellation, with at most 128 submitted unfinished tokens that
@@ -259,9 +249,8 @@ Emergency STOP is considered only on a fresh, exact ownership bookmark of a
 retained, previously submitted Split attempt from a logically cancelled session.
 The attempt must have returned from submission and an earlier addon stop call,
 have no ownership at cancellation, and have no terminal, ambiguous or excess
-native-utterance evidence. The newer session must be active in Split mode, with
-no ownership evidence at all and no previous emergency recovery attempt. Full
-sources and active Full sessions keep their existing playback policy.
+native-utterance evidence. The newer session must be active, with no ownership
+evidence at all and no previous emergency recovery attempt.
 
 STARTED alone is not ownership. Its native ID is correlated when a matching
 bookmark arrives. Unidentified STARTED and BOOKMARK records block recovery until
@@ -273,9 +262,7 @@ or duplicate events do not reopen a retained terminal ID. This does not establis
 native ID reuse rules or exclusive native audio ownership.
 Up to 128 unidentified records are retained, preferring eviction of terminal
 metadata. Unresolved evidence is never evicted to permit recovery; overflow keeps
-the existing evidence-loss guard. Records carry through logical replacement/stop,
-including metadata updates for already-retained IDs during Full narration. Full
-does not collect new unidentified IDs or change its native playback handling.
+the existing evidence-loss guard. Records carry through logical replacement/stop.
 Ownership correlation clears a matching ID, but a returned global stop call does
 not resolve unidentified evidence. Ambiguity and evidence-loss guards remain.
 
@@ -291,7 +278,7 @@ The existing single idle follow-up stop is preserved for an eligible, newly owne
 cancelled request with unresolved native disposition. Its stop-authorization token
 is consumed even during active replacement narration, preventing a later repeat
 from stopping audio while idle. Already identified, completed, unsubmitted,
-wrong-mode and forgotten tokens cannot authorize that follow-up. Older retained
+nonnumeric and forgotten tokens cannot authorize that follow-up. Older retained
 cancellations can also supply evidence for the guarded emergency recovery.
 This native recovery policy adds no automatic retry, timeout, timer, or artificial
 delay. Narration's separate, intentional opening-start delay remains 0.5 seconds.
@@ -304,8 +291,8 @@ Each controller epoch retains up to 128 recent terminal-event records by utteran
 discarding the oldest records when full. An exact current-session ownership
 bookmark is required before a retained failure or finish can be applied.
 Duplicate events within the current session do not duplicate cleanup. A late finish is applied without
-restarting playback notifications, scrolling, or text transitions. In split mode,
-a recovered intermediate finish submits only the next sentence; completed chunk
+restarting playback notifications, scrolling, or text transitions. A recovered
+intermediate finish submits only the next sentence; completed chunk
 and utterance guards prevent repeated progression or resurrection.
 Split also retains at most 128 unowned STARTED records, which can be associated
 after an exact issued bookmark arrives. STARTED alone cannot establish ownership.
@@ -349,7 +336,7 @@ Only the newest cancellation
 can authorize the idle follow-up. Tokens beyond retention limits, or delayed output
 after that follow-up, receive no further stop requests.
 These limits preserve bounded state and avoid speculative synchronization.
-Early-event buffering, current-session ownership, completed-token guards,
+Early-event buffering, current-session ownership, completed-sentence guards,
 sanitization/escaping, Speech Rate and one-sentence-ahead prefetch remain unchanged.
 Retained controller checks exercise Lua state, recovery predicates, supplied event
 handling and bounded metadata. They do not verify native queue contents, event
@@ -357,9 +344,8 @@ ordering, audible cancellation, or survival of newer speech. The user verified
 the earlier idle-stop protection in-game, and independently reported successful
 native ALPHA/BRAVO/CHARLIE cancellation/replacement with Pocket TTS at 2- and
 8-second delays. The current snapshot-based Talking Head lifecycle has since been
-manually tested successfully by the user. Neither result establishes exhaustive
-native cancellation correctness; late Full-mode audio after cancellation remains
-under investigation.
+manually tested successfully by the user. These reports do not establish exhaustive
+native cancellation correctness.
 Speech methods do not
 extract quest text, resolve voices, or control Talking Head behavior.
 
@@ -434,17 +420,16 @@ audio followed by the original newer request playing once. Check skipped recover
 when newer ownership is already known, another native ID is unidentified, or that
 session has already used its recovery budget. A reported successful stop is not
 proof that the newer request survived; capture unresolved cases without retrying.
-Also verify Split-to-Full and Full-to-Split replacement, ordinary Full playback,
-and completion/cancel through QuestFrame, Quest Log and Gossip. Native stopping,
+Also verify replacement and completion/cancel through QuestFrame, Quest Log and Gossip. Native stopping,
 silently purged requests, audible duplicates, event timing and UI rendering still
 require targeted WoW: Forever checks. The user has manually validated the current
 snapshot lifecycle; exhaustive native TTS edge cases are not established.
 
-The user reported successful Pocket TTS and Microsoft Zira Desktop narration in
-both Full and Split modes before this hardening pass. The current snapshot
+The user previously reported successful Pocket TTS and Microsoft Zira Desktop
+narration with sentence streaming. The current snapshot
 lifecycle also has user-reported manual WoW validation. Controller checks and
 source review do not establish every native recovery or voice-refresh case.
-For manual regression checks, use each voice in both reading modes through manual
+For manual regression checks, use each voice with Split Text through manual
 and automatic QuestFrame narration and Quest Log. Verify spinner removal, original
 displayed text, sentence transitions/prefetch, completion, close/cancel, rapid
 replacement, and `/reload`. Open Settings again to refresh voices and confirm
@@ -476,7 +461,7 @@ Only two standalone Lua 5.1 files remain under `Tests/`:
 The retired lifecycle/integration suites and simulated Settings controls have been
 removed. No client simulation or automated test runner replaces them. These
 retained files are isolated Lua logic checks, not Talking Head or WoW integration
-verification, and have not been executed during this cleanup.
+verification.
 
 If execution is explicitly approved, run only the requested file from the addon
 root, for example `lua Tests/VoiceSelection.lua` or `lua Tests/TTS.lua`. Do not add
@@ -487,8 +472,7 @@ Actual event delivery/ordering, frames/templates, animations, model readiness,
 Settings interaction, audio, bookmark timing and native cancellation require the
 real WoW: Forever client. The user has manually tested the current snapshot-based
 Talking Head lifecycle successfully, including the intentional 0.5-second TTS gate.
-That report does not establish exhaustive native TTS correctness; Full-mode late
-playback after cancellation remains an ongoing investigation.
+That report does not establish exhaustive native TTS correctness.
 
 ## Quest narration
 
@@ -549,10 +533,10 @@ local accepted = OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitl
 
 The existing Talking Head singleton is under `OutLoud.UI.TalkingHead`, not a
 separate `OutLoud.TalkingHead`. `Narration:Speak(unit, text, voiceID, displayTitle,
-diagnosticSource, modelFileID)` captures speaker name/faction and the reading mode
-at acceptance. Quest/Gossip pass the already-resolved model FileDataID for NPC
-portraits. `TalkingHead:Show(speaker, text, readingMode, onOpening)` receives only
-captured data and prepares full text or its first normalized sentence. Omitting
+diagnosticSource, modelFileID)` captures speaker name/faction at acceptance.
+Quest/Gossip pass the already-resolved model FileDataID for NPC
+portraits. `TalkingHead:Show(speaker, text, onOpening)` receives only captured
+data and prepares its first normalized sentence. Omitting
 the narration title captures `UnitName(unit)` at request time.
 Quest narration passes an empty override if its title is missing, which displays
 `"Quest"` instead of a previous title or a unit name. The title is set once per
@@ -561,15 +545,12 @@ The title getters were checked against the local Forever export's `QuestInfo.lua
 `QuestFrame.lua`, and `QuestLogDocumentation.lua`; their live results across
 all Detail/Progress/Reward and Quest Log cases are not established by the general
 lifecycle report and need targeted client checks.
-The TTS dispatcher applies the existing reading mode; quest integration never
-selects streaming/full methods or splits sentences itself. `Narration:Speak()`
+The TTS entry point always streams sentences; quest integration never splits
+sentences itself. `Narration:Speak()`
 returns presentation-request acceptance, not native submission success. Native
 submission is scheduled 0.5 seconds after opening begins; rejection is reported through
 the existing error logger and closes the presentation. Direct TTS methods retain
-their synchronous return values. The captured reading mode is passed as the
-optional final argument to `TTS:Speak()`, keeping presentation and dispatch aligned
-even if settings change while waiting. Direct callers that omit it use the saved
-mode as before. Speech rate retains its existing per-submission behavior.
+their synchronous return values. Speech rate retains its existing per-submission behavior.
 
 The spinner turns on before speech submission. The shared `OutLoud.Narration`
 controller supplies a session-end callback that hides Talking Head and clears
@@ -578,7 +559,7 @@ stop, or failure. Each narration request gets a new presentation ownership token
 is submitted, so cancellation of the previous session cannot hide the new display.
 The callback also handles completion during the native submission call. A
 playback-start callback clears loading at the first valid current session
-bookmark, once per session in both reading modes, and checks the same presentation
+bookmark, once per session, and checks the same presentation
 ownership token. The spinner stays on while speech is generating; submission
 return and unowned playback-start events do not clear it. TTS does not depend on
 the UI.
@@ -592,7 +573,7 @@ then starts closing, which immediately calls `TTS:Stop()`.
 
 The visual singleton owns `State`: `Closed`, `Opening`, `Opened`, `Closing`.
 `Narration.Narration` holds only the latest accepted request. Text, resolved voice,
-speaker name/faction/model asset, reading mode and source form its immutable
+speaker name/faction/model asset and source form its immutable
 content. Submission/timer bookkeeping is separate mutable request state. Accepted
 content is not reread or revalidated against live quest/gossip UI during closing,
 opening or submission. Request-time integration guards remain required.
@@ -632,7 +613,7 @@ Its own cancellation and submission are guarded to avoid recursive native stops
 or cancelling its incoming request. A pre-stop notification is needed so an older
 stop cannot invalidate newer work requested reentrantly during native STOP.
 The TTS controller has no quest or UI dependency; its existing session, bookmark,
-prefetch, stale-playback, Emergency STOP and Full-mode decisions are unchanged.
+prefetch, stale-playback and Emergency STOP decisions are unchanged.
 
 Quest, Quest Log and Gossip validate/read their source only when activation
 captures a request. Their UI refresh hooks no longer cancel accepted content.
@@ -671,12 +652,11 @@ including the intentional 0.5-second submission delay. The table records source-
 reasoning, not a claim that every scenario has an individual recorded client test.
 Native queue removal, stale playback, newer-speech survival after Emergency STOP,
 all timer/event edge cases and every NPC appearance are not exhaustively verified.
-Full-mode late audio after cancellation remains under investigation.
 
 ### Automatic QuestFrame narration
 
 `OutLoudDB.autoNarrateQuests` defaults to `false` when absent; existing saved
-values and voice/reading-mode settings are preserved. Database access uses
+values and voice settings are preserved. Database access uses
 `GetAutoNarrateQuests()` and `SetAutoNarrateQuests(enabled)`.
 
 `OutLoudDB.autoNarrationDelay` stores seconds, defaulting to `2`. Database access
@@ -685,8 +665,10 @@ and the setter clamp numeric values to 0–5 and round to the nearest 0.5-second
 step; invalid values use the default. Valid existing values are preserved.
 `Database.AutoNarrationDelay` supplies the shared default, bounds, and step.
 
-The Settings section is labelled **Narration**, with the existing **Reading Mode**
-choices and **Automatically read quest text** checkbox. The checkbox uses
+The Settings section is labelled **Narration** and starts with the
+**Automatically read quest text** checkbox, followed by automatic delay and speech
+rate controls. It has no reading-mode selector or redundant single-choice control.
+The checkbox uses
 `SettingsCheckboxTemplate`, `SettingsCheckboxMixin:Init()`, and its
 `OnValueChanged` callback from the local Forever export's
 `Blizzard_Settings_Shared/Blizzard_SettingControls.xml` and `.lua`. Its tooltip
@@ -716,15 +698,15 @@ resets it to 0. Both controls remain enabled independently of automatic narratio
 bounds and step; initialization, `GetSpeechRate()`, and `SetSpeechRate(rate)`
 validate values. Out-of-range integers are clamped; missing, nonnumeric,
 fractional, or nonfinite values fall back to 0. Existing settings are retained.
-The shared TTS submission reads this setting for every full-text or sentence
-request. Changing it does not restart playback; an already prefetched sentence
+The TTS submission reads this setting for every sentence request. Changing it does
+not restart playback; an already prefetched sentence
 retains its submitted rate. No global Blizzard speech-rate setting is modified.
 
 Retained Lua logic checks cover rate validation, saved-value handling and
-Full/Split submission parameters. They do not cover native slider behavior or
+sentence submission parameters. They do not cover native slider behavior or
 WoW persistence. In-game verification is required for slider rendering,
 stepper/drag interaction, `/reload` persistence, and audible speed at -10, 0,
-and +10 in both reading modes. Check rate changes during split playback and
+and +10 with Split Text. Check rate changes during split playback and
 confirm subsequent submissions adopt the new rate without interrupting audio.
 
 Only the existing `QuestFrame` `OnEvent` post-hook schedules automatic narration,
@@ -771,7 +753,7 @@ submit speech 0.5 seconds after opening begins.
 
 Check the default-off state, slider layout and disabled state, 0.5-second steps,
 seconds formatting, default delay and persistence after reload in-game. Verify
-all three automatic page reads with zero and nonzero delays in both modes,
+all three automatic page reads with zero and nonzero delays in both voice assignment modes,
 NPC/player fallback, cancellation on close/page change/disable/replacement, and
 manual QuestFrame and Quest Log activation without the configurable delay or a
 later duplicate, preserving the separate 0.5-second submission gate.
@@ -831,13 +813,13 @@ Both entry points share one presentation ownership token in `OutLoud.Narration`.
 It forwards the existing end, playback-start, and text-progress callbacks from
 `TTS:Speak()` to the same Talking Head. New narration replaces ownership before
 TTS cancels the previous session, so a stale callback cannot hide the new speaker.
-Both reading modes, loading, sentence fades, paged scrolling, and close/cancel
+Sentence streaming, loading, sentence fades, paged scrolling, and close/cancel
 behavior remain in their existing services. Closing the Quest Log hides its button;
 accepted snapshots continue, including while closing/opening or awaiting submission.
 
 The general lifecycle validation does not establish every Quest Log button
 placement/visibility case, player appearance/voice token, or description-only read
-in both modes. Use targeted client checks for affected cases and cross-source replacement.
+with Split Text. Use targeted client checks for affected cases and cross-source replacement.
 
 ### Gossip narration
 
@@ -882,8 +864,8 @@ and configured voice while retaining the captured NPC name. A missing NPC name
 uses `Unknown`; an unusable player/narrator voice stops the request.
 
 `Narration:Speak()` receives the original text and captured title, so later gossip
-pages cannot change an active display. The existing TTS dispatcher handles Full
-and Split modes, rate, sanitization, XML escaping, ownership and replacement.
+pages cannot change an active display. The TTS controller handles sentence
+streaming, rate, sanitization, XML escaping, ownership and replacement.
 Closing GossipFrame hides its button and prevents another read; as with QuestFrame,
 it does not stop an existing narration. Subsequent reads recapture identity/text
 and clear the shared inspection model before loading. Starting manual gossip
@@ -897,7 +879,7 @@ ID for Daniel (`1011653`, `HUMAN`). The successful lifecycle report does not
 exhaustively establish greeting retrieval, button placement, actual hook/event
 order, immediate readiness across NPC switches, portrait/title appearance,
 audio/bookmark edge cases or scrolling.
-Check both voice modes and reading modes, empty greeting/options-only pages,
+Check both voice assignment modes, empty greeting/options-only pages,
 repeated clicks, NPC/page changes, close/reopen, fallback, and Gossip-before-QuestFrame
 loading. Repeat with automatic quest narration enabled to confirm gossip stays manual.
 
@@ -980,8 +962,8 @@ their original targets; their dialogue target now resolves through
 `Scroll.Content.Text`. The text sheen anchors to
 the fixed viewport, so it does not move with the scroll content.
 
-Full mode prepares all text before the entrance and never replaces it during
-playback. Split mode prepares the first sentence using `TTS:SplitSentences()`.
+Talking Head prepares the first sentence using `TTS:SplitSentences()` before
+the entrance.
 The shared Narration coordinator forwards the fifth TTS callback only while its
 request and presentation transition still own the display. Talking Head buffers
 the latest progress during Opening and applies it when opening completes.
@@ -992,8 +974,8 @@ the old text between them and resets scrolling. These groups do not animate the
 portrait, name, background, close button, or spinner. A rapid new sentence replaces
 the pending display rather than starting an obsolete transition.
 
-The existing current-session ownership callback starts UI auto-scroll, once for
-full text or for each active split sentence after its fade swaps the text.
+The existing current-session ownership callback starts UI auto-scroll for each
+active sentence after its fade swaps the text.
 In `UI/TalkingHead.lua`, `INITIAL_SCROLL_DELAY = 10` waits ten seconds before the
 first page moves. `SCROLL_PAGE_FACTOR = 1.0` sets each page distance to one viewport
 height, and `SCROLL_SPEED = 18` moves it at eighteen UI pixels per second. Between
@@ -1035,7 +1017,7 @@ is shown and no new narration starts. The inspection model is cleared before
 each NPC load to prevent reuse of the previous NPC's FileDataID. An asynchronous
 load returning `model-unavailable` immediately takes the player fallback;
 there is no model-loading retry timer or fallback loop. Normal NPC narration,
-item/no-NPC quests, both reading modes, and failed player resolution require
+item/no-NPC quests and failed player resolution require
 in-game verification.
 
 For voice assignment verification in-game, open Options and switch between
@@ -1043,7 +1025,7 @@ Single Voice and Multiple Voices. Confirm the selected radio, disabled dropdowns
 and steppers, retained selections, and scroll layout after reopening and `/reload`.
 In Single Voice, try a mapped NPC, an unmapped NPC with a usable model, an item
 quest without an NPC, and Quest Log narration. Check portrait/name independently
-of voice in both full and split modes, including automatic narration with its
+of voice with Split Text, including automatic narration with its
 configured delay. Clear Narrator Voice and confirm a graceful error without
 speech. Changing mode during playback should leave that session running.
 
@@ -1098,9 +1080,9 @@ Select Multiple Voices and configure the NPC's family/gender voice first, then:
 
 1. Open an NPC quest greeting/list: button hidden.
 2. Select a quest offer/detail: button visible without overlapping native controls.
-3. Click Out Loud: current offer dialogue uses the configured NPC voice and chosen
-   reading mode. Talking Head shows the NPC portrait/name and exact
-   `GetQuestText()` result, with loading on before submission. Click again to
+3. Click Out Loud: current offer dialogue uses the configured NPC voice and
+   sentence streaming. Talking Head shows the NPC portrait/name and current sentence
+   from `GetQuestText()`, with loading on before submission. Click again to
    check presentation update and narration restart.
 4. Return to an incomplete/in-progress quest with dialogue: button visible;
    clicking displays and narrates the exact `GetProgressText()` result.
@@ -1110,11 +1092,9 @@ Select Multiple Voices and configure the NPC's family/gender voice first, then:
 7. Close QuestFrame: button disappears.
 8. Return to greeting/list: button hidden again.
 
-Repeat the three dialogue-page click checks in both **Split text** and
-**Read full text** Options modes. Both modes should use the same configured voice
-and speaker, while Talking Head displays full text or the current sentence
-according to the mode. Talking Head closes
-and clears its spinner after the full text or final streamed sentence finishes.
+Repeat the three dialogue-page click checks with Split Text. Talking Head should
+display the current sentence using the configured voice and speaker. It closes
+and clears its spinner after the final streamed sentence finishes.
 Click again during narration to check that restarting keeps the new presentation
 visible. Closing Talking Head stops narration; calling `OutLoud.TTS:Stop()` also
 closes the presentation. With an unset NPC voice or an unavailable/unmapped model,
@@ -1125,7 +1105,7 @@ explain the failure.
 
 For the quest-title presentation change, repeat Detail, Progress, and Reward with
 Single Voice and confirm the player model plus current quest title for manual and
-automatic narration. Check Quest Log in both assignment modes. In Full and Split,
+automatic narration. Check Quest Log in both assignment modes. With Split Text,
 verify the title through loading, sentence transitions, and completion; switch quest
 selection during playback and confirm it stays captured. Check long titles for
 clipping and missing titles for the generic `"Quest"` fallback. These remain
@@ -1157,7 +1137,6 @@ numeric WoW TTS voice ID:
 
 ```lua
 OutLoud.TTS:SpeakStreaming("First sentence. Second sentence. Third sentence.", voiceID)
-OutLoud.TTS:SpeakWholeText("First sentence. Second sentence. Third sentence.", voiceID)
 OutLoud.TTS:Speak("First sentence. Second sentence. Third sentence.", voiceID)
 OutLoud.TTS:Stop()
 ```

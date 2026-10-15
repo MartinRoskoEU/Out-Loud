@@ -76,7 +76,7 @@ function Narration:OnClosed()
     local talkingHead = OutLoud.UI.TalkingHead
     local request = self.Narration
     if not request or request.submitted or talkingHead.State ~= "Closed" then return end
-    local ok, reason = talkingHead:Show(request.speaker, request.text, request.readingMode, function(transition)
+    local ok, reason = talkingHead:Show(request.speaker, request.text, function(transition)
         self:ScheduleSubmission(request, transition)
     end)
     if not ok and self.Narration == request then
@@ -114,7 +114,7 @@ function Narration:Submit(request, transition)
         if OwnsPresentation(self, request, transition) then talkingHead:SetLoading(false) end
     end, function(spokenText, chunk, offset)
         if OwnsPresentation(self, request, transition) then talkingHead:OnTextProgress(spokenText, chunk, offset) end
-    end, request.source, request.readingMode)
+    end, request.source)
     self.Submitting = submitting
     if not ok then
         OutLoud:Error("Read stopped: TTS rejected the request:", tostring(reason))
@@ -138,7 +138,6 @@ function Narration:Speak(unit, text, voiceID, displayTitle, diagnosticSource, mo
     local request = {
         id = self.RequestID, speaker = speaker, text = text, voiceID = voiceID,
         source = type(diagnosticSource) == "string" and diagnosticSource or "Narration",
-        readingMode = OutLoud.Database:GetReadingMode(),
     }
     -- Change ownership before native STOP can synchronously notify the outgoing session.
     local previous = self.Narration

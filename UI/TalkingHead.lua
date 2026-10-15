@@ -194,7 +194,7 @@ function TalkingHead:ResetAnimations()
     end
 end
 
-function TalkingHead:Show(speaker, text, readingMode, onOpening)
+function TalkingHead:Show(speaker, text, onOpening)
     self:Initialize()
     if self.State ~= "Closed" then return false, "talking-head-busy" end
 
@@ -261,7 +261,7 @@ function TalkingHead:Show(speaker, text, readingMode, onOpening)
     end
 
     self.NameText:SetText(speaker.name)
-    self:PrepareText(text, readingMode)
+    self:PrepareText(text)
 
     if faction == "Alliance" then
         self.NameText:SetTextColor(0.02, 0.17, 0.33, 1)
@@ -283,13 +283,9 @@ function TalkingHead:Show(speaker, text, readingMode, onOpening)
     return true
 end
 
-function TalkingHead:PrepareText(text, readingMode)
-    self.DisplayChunk = readingMode == OutLoud.TTS.ReadingModes.SPLIT and 1 or 0
-    local displayed = text or ""
-    if readingMode == OutLoud.TTS.ReadingModes.SPLIT then
-        displayed = OutLoud.TTS:SplitSentences(displayed)[1] or ""
-    end
-    self:SetDisplayedText(displayed)
+function TalkingHead:PrepareText(text)
+    self.DisplayChunk = 1
+    self:SetDisplayedText(OutLoud.TTS:SplitSentences(text or "")[1] or "")
 end
 
 function TalkingHead:StopTextFlow(resetScroll)

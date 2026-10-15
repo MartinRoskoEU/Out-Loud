@@ -26,8 +26,7 @@ and the loading spinner clears when owned playback begins.
   styling, opening/closing fades, a close button that stops narration, and a
   controllable loading spinner.
 - A speech controller that accepts supplied text and a WoW TTS voice ID,
-  supports sentence streaming and whole-text speech, and can cancel narration.
-- A saved reading-mode setting used by the speech dispatcher.
+  streams sentences and can cancel narration.
 - Optional automatic narration for quest offer, progress, and reward pages,
   disabled by default. Manual buttons remain available.
 - A manual **Out Loud** button for quest offer, progress, and reward dialogue.
@@ -87,21 +86,18 @@ Unavailable selections are indicated without erasing the stored setting.
 Available families come from generated mapping data. Each unique family appears
 once, regardless of how many models use it. Assignments are saved between sessions.
 
-## Speech Modes
+## Narration
 
-The **Narration** section of Options offers two reading modes:
+**Split Text** is the only supported reading mode. It reads sentence by sentence,
+submitting the first sentence 0.5 seconds after Talking Head starts opening and
+prefetching one sentence ahead as playback begins.
 
-- **Split text:** reads sentence by sentence, submitting the first sentence
-  0.5 seconds after Talking Head starts opening and prefetching one sentence ahead
-  as playback begins.
-- **Read full text** (default): sends the complete text to TTS in one request.
-
-Talking Head displays the full dialogue in full mode and the currently spoken
-sentence in split mode. Sentence changes use a brief text-only fade.
+Talking Head displays the currently spoken sentence. Sentence changes use a brief
+text-only fade.
 Overflowing text scrolls gently once playback begins and has a scrollbar for
 manual reading. Scrolling manually pauses automatic movement for that text.
 
-All Out Loud narration buttons use this choice. Each valid request captures its
+All Out Loud narration buttons use Split Text. Each valid request captures its
 dialogue and voice; later quest navigation does not cancel it. Speech is submitted
 0.5 seconds after Talking Head starts opening. Clicking again stops speech
 immediately, finishes closing, then opens the latest requested dialogue.
@@ -128,7 +124,6 @@ successfully in WoW: Forever, including its intentional 0.5-second TTS submissio
 delay. The dialogue text APIs and NPC voice resolver also have user-reported
 in-game verification. These checks do not establish exhaustive correctness across
 all Settings controls, NPC appearances, voices, or native TTS cancellation edge cases.
-Late Full-mode audio after cancellation remains under investigation.
 
 ## Architecture
 
@@ -138,8 +133,7 @@ The addon separates voice resolution, speech, and presentation:
 - `VoiceSelection` selects the configured narrator in Single Voice mode, or
   resolves an NPC model or player race to a family and uses `UnitSex` gender
   detection in Multiple Voices mode.
-- The TTS controller speaks supplied text with a supplied voice and applies the
-  selected speech mode.
+- The TTS controller streams supplied text sentence by sentence with a supplied voice.
 - Talking Head provides the speaker portrait, dialogue display, and loading state.
 - Quest and gossip integrations supply live dialogue and choose the displayed model and title
   independently of voice resolution. A shared narration controller coordinates

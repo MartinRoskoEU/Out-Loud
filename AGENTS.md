@@ -12,7 +12,7 @@ The addon is built around these responsibilities:
 - runtime gender detection through `UnitSex(unit)`
 - user-configurable Male/Female voices per Voice Family
 - text-to-speech playback through the WoW TTS API
-- sentence-streamed and whole-text reading modes
+- sentence-streamed Split Text narration
 - a custom Blizzard-style Talking Head UI
 
 Follow the existing project architecture and conventions. Do not introduce a new architecture unless explicitly requested.
@@ -159,8 +159,7 @@ unless the existing architecture explicitly requires it.
 Keep the existing public speech responsibilities separated:
 
 - sentence streaming
-- whole-text speech
-- mode-based dispatcher
+- the shared speech entry point
 - stop/cancel
 
 Do not add artificial delays unless in-game testing proves they are necessary.
@@ -316,7 +315,7 @@ authoritative runtime behavior. Actual WoW behavior must be verified in the game
 
 Isolated pure Lua logic tests are acceptable when explicitly requested and their
 scope is clear. Useful subjects include sentence splitting, settings normalization,
-voice-family lookup, mode dispatch, and controller predicates/state management.
+voice-family lookup, speech forwarding, and controller predicates/state management.
 Exercise production modules where practical rather than duplicate their logic.
 Minimal supplied inputs or API doubles may isolate those checks; they must not
 simulate a client, native queue, or authoritative event ordering.
@@ -387,7 +386,7 @@ It should explain:
 - what it currently does
 - major features
 - how voice selection works at a high level
-- configurable speech modes
+- sentence-streamed narration
 - current project status
 - major components at a high level
 
@@ -512,7 +511,7 @@ Preserve these unless explicitly changed:
 - Multiple models may share one Voice Family.
 - `SKYBORNE` is one shared Voice Family.
 - Options provides Male and Female voice selection per Voice Family.
-- TTS supports both sentence streaming and whole-text reading.
+- Split Text sentence streaming is the only supported reading mode.
 - Sentence streaming prefetches exactly one sentence ahead.
 - No artificial delay is used inside the tested sentence-streaming path.
 - Narration submits TTS 0.5 seconds after Talking Head opening begins; preserve this manually validated delay.

@@ -69,8 +69,8 @@ function Diagnostics:GetReport()
     local tts = OutLoud.TTS
     local session = tts and tts.CurrentSession
     if session then
-        lines[#lines + 1] = string.format("Current: s=%s mode=%s state=%s created=%.3f source=%s",
-            session.id, session.mode, session.state, session.createdAt, Value(session.source))
+        lines[#lines + 1] = string.format("Current: s=%s state=%s created=%.3f source=%s",
+            session.id, session.state, session.createdAt, Value(session.source))
         if session.sentenceStates then
             lines[#lines + 1] = string.format("Recovery: attempted=%s result=%s from=%s unidentified=%s evidence-lost=%s",
                 Value(session.emergencyRecoveryAttempted == true), Value(session.emergencyRecoveryResult),

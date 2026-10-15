@@ -20,7 +20,6 @@ for id = 0, 60 do
 end
 local addon = {
     TTS = {
-        ReadingModes = { FULL = "full", SPLIT = "split" },
         GetVoices = function() return availableVoices end,
     },
 }
@@ -57,7 +56,7 @@ local savedVariables = {
         SKYBORNE = { [2] = 10, [3] = 11 },
         HUMAN = { [2] = 0, [3] = 13 },
     },
-    readingMode = "split",
+    readingMode = "retired",
 }
 environment.OutLoudDB = savedVariables
 
@@ -65,7 +64,7 @@ addon.Database:Initialize()
 
 Equal(addon.Database:GetVoice("UNDEAD", 2), 50, "Keep saved male assignment")
 Equal(addon.Database:GetVoice("UNDEAD", 3), 41, "Keep saved female assignment")
-Equal(addon.Database:GetReadingMode(), "split", "Keep reading settings")
+Equal(savedVariables.readingMode, nil, "Remove the obsolete preference without resetting voice assignments")
 Equal(addon.Database:GetVoiceMode(), "raceGender", "Existing users default to Multiple Voices")
 Equal(addon.Database:GetSingleVoice(), nil, "No arbitrary narrator voice is chosen")
 
@@ -73,9 +72,6 @@ Equal(addon.Database:GetAutoNarrationDelay(), 2, "Automatic delay default")
 
 Equal(addon.Database:GetSpeechRate(), 0, "Existing SavedVariables receive the normal rate")
 
-addon.Database:SetReadingMode("invalid")
-Equal(addon.Database:GetReadingMode(), "full", "Invalid reading mode uses the existing full default")
-addon.Database:SetReadingMode("split")
 local humanVoices = savedVariables.voices.HUMAN
 savedVariables.voices.HUMAN = false
 Equal(addon.Database:GetVoice("HUMAN", 2), nil, "Malformed family settings are unresolved")

@@ -34,11 +34,6 @@ local function NormalizeAutoNarrationDelay(value)
     return math.floor(value / range.STEP + 0.5) * range.STEP
 end
 
-local function NormalizeReadingMode(mode)
-    local modes = OutLoud.TTS.ReadingModes
-    return mode == modes.SPLIT and modes.SPLIT or modes.FULL
-end
-
 local function NormalizeVoiceMode(mode)
     local modes = OutLoud.VoiceSelection.AssignmentModes
     return mode == modes.SINGLE and modes.SINGLE or modes.RACE_GENDER
@@ -63,7 +58,8 @@ function Database:Initialize()
     if db.autoNarrateQuests == nil then
         db.autoNarrateQuests = false
     end
-    db.readingMode = NormalizeReadingMode(db.readingMode)
+    -- Retire the obsolete preference without resetting other saved settings.
+    db.readingMode = nil
     db.voiceMode = NormalizeVoiceMode(db.voiceMode)
     db.autoNarrationDelay = NormalizeAutoNarrationDelay(db.autoNarrationDelay)
     db.speechRate = NormalizeSpeechRate(db.speechRate)
@@ -108,14 +104,6 @@ end
 
 function Database:SetSingleVoice(voiceID)
     self.DB.singleVoice = voiceID
-end
-
-function Database:GetReadingMode()
-    return NormalizeReadingMode(self.DB.readingMode)
-end
-
-function Database:SetReadingMode(mode)
-    self.DB.readingMode = NormalizeReadingMode(mode)
 end
 
 function Database:GetAutoNarrateQuests()

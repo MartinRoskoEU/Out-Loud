@@ -96,7 +96,7 @@ end
 local function ArchiveSplitSession(self, session)
     self.SplitHistory = self.SplitHistory or {}
     local history = {
-        id = session.id, mode = session.mode, state = session.state,
+        id = session.id, state = session.state,
         createdAt = session.createdAt, endedAt = session.endedAt,
         endReason = session.endReason, stopReason = session.stopReason, stoppedAt = session.stoppedAt,
         replacedBy = session.replacedBy,
@@ -160,10 +160,6 @@ local function FindSplitOwner(self, utteranceID)
             end
         end
     end
-    -- A Full-mode binding can also conflict with a retired Split utterance.
-    if owner and session and session.mode == "full" and session.utterances[utteranceID] then
-        conflict = true
-    end
     return owner, conflict
 end
 
@@ -182,11 +178,6 @@ local function EachSplitAttempt(self, callback, outgoing)
         Visit(retired)
     end
 end
-
-TTS.ReadingModes = {
-    FULL = "full",
-    SPLIT = "split",
-}
 
 function TTS:GetVoices()
     if self.Voices then
@@ -276,9 +267,7 @@ local function NotifyTextProgress(self, session, token, offset)
     if self.CurrentSession ~= session or type(session.onTextProgress) ~= "function" then
         return
     end
-    local text = token == "WHOLE" and session.text or session.sentences[token]
-    local ok, message = pcall(session.onTextProgress, text,
-        token == "WHOLE" and 0 or token, offset, session.id)
+    local ok, message = pcall(session.onTextProgress, session.sentences[token], token, offset, session.id)
     if not ok then
         OutLoud:Error("TTS text-progress callback failed:", tostring(message))
     end
@@ -335,21 +324,15 @@ end
 
 local function RememberCancelledSession(self, session)
     local pendingTokens, count = {}, 0
-    local identifiedTokens = {}
-    for _, token in pairs(session.utterances) do identifiedTokens[token] = true end
-    if session.mode == self.ReadingModes.SPLIT then
-        -- Prefer recent submissions, matching compact history's retention order.
-        for chunk = #session.sentenceStates, 1, -1 do
-            local sentence = session.sentenceStates[chunk]
-            local attempt = sentence.attempts[1]
-            if attempt and not attempt.ownershipConfirmed and not TerminalKnown(attempt)
-                and count < MAX_CANCELLED_TOKENS then
-                pendingTokens[chunk] = true
-                count = count + 1
-            end
+    -- Prefer recent submissions, matching compact history's retention order.
+    for chunk = #session.sentenceStates, 1, -1 do
+        local sentence = session.sentenceStates[chunk]
+        local attempt = sentence.attempts[1]
+        if attempt and not attempt.ownershipConfirmed and not TerminalKnown(attempt)
+            and count < MAX_CANCELLED_TOKENS then
+            pendingTokens[chunk] = true
+            count = count + 1
         end
-    elseif session.text and not session.completedTokens.WHOLE and not identifiedTokens.WHOLE then
-        pendingTokens.WHOLE = true
     end
     -- Keep only a bounded summary of the most recent cancellation, without text/buffers.
     self.CancelledSession = next(pendingTokens)
@@ -404,20 +387,17 @@ function TTS:Stop(reason, replacedBy, diagnosticTrigger)
     return true
 end
 
-function TTS:StartSession(mode, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
+function TTS:StartSession(voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
     self:Initialize()
     -- Reserve this request's identity before callbacks can request newer narration.
     self.SessionID = self.SessionID + 1
 
     local session = {
         id = self.SessionID,
-        mode = mode,
         voiceID = voiceID,
         state = "active",
         source = type(diagnosticSource) == "string" and diagnosticSource or "Direct TTS",
         createdAt = Now(),
-        utterances = {},
-        completedTokens = {},
         completedUtterances = {},
         pendingTerminals = {},
         pendingTerminalOrder = {},
@@ -428,10 +408,9 @@ function TTS:StartSession(mode, voiceID, onSessionEnded, onPlaybackStarted, onTe
         onPlaybackStarted = onPlaybackStarted,
         onTextProgress = onTextProgress,
     }
-    -- Metadata only in Full mode; its playback handling/recovery policy is unchanged.
     session.unidentifiedPlayback, session.unidentifiedPlaybackCount = {}, 0
 
-    Record("session-created", session.id, nil, nil, nil, "mode=" .. mode .. " source=" .. session.source)
+    Record("session-created", session.id, nil, nil, nil, "source=" .. session.source)
     self:Stop("replaced", session.id, "replacement:" .. session.source)
     if self.SessionID ~= session.id then
         session.cancelled, session.state, session.stopReason = true, "cancelled", "superseded-during-replacement"
@@ -443,7 +422,7 @@ function TTS:StartSession(mode, voiceID, onSessionEnded, onPlaybackStarted, onTe
     self.IdleSplitEvents = nil
     self.CurrentSession = session
     Record("session-active", session.id)
-    OutLoud:Debug("TTS session:", session.id, "mode:", mode, "voice:", voiceID)
+    OutLoud:Debug("TTS session:", session.id, "voice:", voiceID)
 
     return session
 end
@@ -453,28 +432,25 @@ function TTS:SubmitText(session, text, chunk)
         return false, "invalid-text"
     end
 
-    local token = chunk or "WHOLE"
+    local token = chunk
     local mark = "OUTLOUD:SPEECH:" .. session.id .. ":" .. token
-    local attempt
-    if session.mode == self.ReadingModes.SPLIT then
-        if self.CurrentSession ~= session or session.state ~= "active" then return false end
-        local sentence = session.sentenceStates[chunk]
-        if not sentence or sentence.state ~= "planned" then return false end
-        attempt = {
-            sessionID = session.id, sentenceIndex = chunk, id = #sentence.attempts + 1,
-            bookmark = mark, submissionState = "calling", submittedAt = Now(),
-            voiceID = session.voiceID, rate = OutLoud.Database:GetSpeechRate(),
-            utterances = {}, utteranceCount = 0, stopCount = 0,
-            nativeState = "waiting-unconfirmed", unresolved = true,
-        }
-        sentence.attempts[#sentence.attempts + 1] = attempt
-        sentence.submissionState, sentence.bookmark = "calling", mark
-        SetSentenceState(sentence, "submitted")
-        -- Compatibility views only; Split decisions use the lifecycle records.
-        session.queued[chunk] = true
-    end
-    local rate = attempt and attempt.rate or OutLoud.Database:GetSpeechRate()
-    Record("submission", session.id, token, attempt and attempt.id, nil, "rate=" .. rate)
+    if self.CurrentSession ~= session or session.state ~= "active" then return false end
+    local sentence = session.sentenceStates[chunk]
+    if not sentence or sentence.state ~= "planned" then return false end
+    local attempt = {
+        sessionID = session.id, sentenceIndex = chunk, id = #sentence.attempts + 1,
+        bookmark = mark, submissionState = "calling", submittedAt = Now(),
+        voiceID = session.voiceID, rate = OutLoud.Database:GetSpeechRate(),
+        utterances = {}, utteranceCount = 0, stopCount = 0,
+        nativeState = "waiting-unconfirmed", unresolved = true,
+    }
+    sentence.attempts[#sentence.attempts + 1] = attempt
+    sentence.submissionState, sentence.bookmark = "calling", mark
+    SetSentenceState(sentence, "submitted")
+    -- Compatibility views only; Split decisions use the lifecycle records.
+    session.queued[chunk] = true
+    local rate = attempt.rate
+    Record("submission", session.id, token, attempt.id, nil, "rate=" .. rate)
     OutLoud:Debug("TTS SpeakText call: session:", session.id, "chunk:", token, "bytes:", #text)
     local ok, message = pcall(
         C_VoiceChat.SpeakText,
@@ -485,18 +461,16 @@ function TTS:SubmitText(session, text, chunk)
         false
     )
 
-    if attempt then
-        -- Synchronous native events may already have completed/cancelled this attempt.
-        attempt.submissionState = ok and "returned" or "error"
-        attempt.submissionReturnedAt = Now()
-        session.sentenceStates[chunk].submissionState = attempt.submissionState
-        if not ok then
-            attempt.submissionFailed = true
-            local sentence = session.sentenceStates[chunk]
-            if session.state == "active" and sentence.state ~= "completed" then SetSentenceState(sentence, "failed") end
-        end
+    -- Synchronous native events may already have completed/cancelled this attempt.
+    attempt.submissionState = ok and "returned" or "error"
+    attempt.submissionReturnedAt = Now()
+    session.sentenceStates[chunk].submissionState = attempt.submissionState
+    if not ok then
+        attempt.submissionFailed = true
+        local sentence = session.sentenceStates[chunk]
+        if session.state == "active" and sentence.state ~= "completed" then SetSentenceState(sentence, "failed") end
     end
-    Record("submission-result", session.id, token, attempt and attempt.id, nil, ok and "returned" or "error")
+    Record("submission-result", session.id, token, attempt.id, nil, ok and "returned" or "error")
 
     if not ok then
         OutLoud:Error("TTS SpeakText failed: session:", session.id, "error:", tostring(message))
@@ -563,7 +537,7 @@ function TTS:SpeakStreaming(text, voiceID, onSessionEnded, onPlaybackStarted, on
         return false, "invalid-text"
     end
 
-    local session = self:StartSession(self.ReadingModes.SPLIT, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
+    local session = self:StartSession(voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
     if self.CurrentSession ~= session then return false, "session-replaced" end
     session.sentences = sentences
     session.speechSentences = speechSentences
@@ -581,30 +555,8 @@ function TTS:SpeakStreaming(text, voiceID, onSessionEnded, onPlaybackStarted, on
     return self:SubmitChunk(session, 1)
 end
 
-function TTS:SpeakWholeText(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
-    local valid, reason = ValidInput(text, voiceID)
-
-    if not valid then
-        return false, reason
-    end
-
-    local speechText = self:SanitizeSpeechText(text)
-    if speechText == "" then
-        return false, "invalid-text"
-    end
-
-    local session = self:StartSession(self.ReadingModes.FULL, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
-    if self.CurrentSession ~= session then return false, "session-replaced" end
-    session.text = text
-    return self:SubmitText(session, speechText)
-end
-
-function TTS:Speak(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource, readingMode)
-    if (readingMode or OutLoud.Database:GetReadingMode()) == self.ReadingModes.SPLIT then
-        return self:SpeakStreaming(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
-    end
-
-    return self:SpeakWholeText(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
+function TTS:Speak(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
+    return self:SpeakStreaming(text, voiceID, onSessionEnded, onPlaybackStarted, onTextProgress, diagnosticSource)
 end
 
 function TTS:GetBookmarkSession(sessionID, token, allowStop)
@@ -656,9 +608,7 @@ function TTS:GetSplitRecoveryEligibility(attempt, utteranceID, fresh)
         local session = self.CurrentSession
         local sentence, retired = FindRetiredSentence(self, attempt.sessionID, attempt.sentenceIndex)
         local observation = attempt.utterances[utteranceID or attempt.utteranceID]
-        if session.mode ~= self.ReadingModes.SPLIT then
-            eligibility.reason = "full-mode-preserved"
-        elseif session.state ~= "active" or session.id <= attempt.sessionID then
+        if session.state ~= "active" or session.id <= attempt.sessionID then
             eligibility.reason = "no-newer-active-session"
         elseif not retired or not sentence or retired.state ~= "cancelled" or not sentence.logicalCancelled then
             eligibility.reason = "source-session-not-cancelled"
@@ -710,9 +660,6 @@ local function TrackUnidentifiedPlayback(self, event, utteranceID, status)
     local session = self.CurrentSession
     local buffer = session or self.IdleSplitEvents
     if not buffer then return end
-    -- Full does not collect new IDs; only update Split evidence carried into it.
-    if session and session.mode ~= self.ReadingModes.SPLIT
-        and not buffer.unidentifiedPlayback[utteranceID] then return end
     if type(utteranceID) ~= "number" or utteranceID ~= utteranceID then
         buffer.recoveryEvidenceLost = true
         return
@@ -720,7 +667,7 @@ local function TrackUnidentifiedPlayback(self, event, utteranceID, status)
     local owner, conflict = FindSplitOwner(self, utteranceID)
     if conflict or (owner and owner.ambiguous) then
         buffer.recoveryOwnershipAmbiguous = true
-    elseif owner or (session and session.mode == self.ReadingModes.FULL and session.utterances[utteranceID]) then
+    elseif owner then
         ClearUnidentifiedPlayback(buffer, utteranceID)
         return
     end
@@ -889,8 +836,7 @@ local function ApplySplitTerminal(self, attempt, event, utteranceID, status)
     elseif event == "VOICE_CHAT_TTS_PLAYBACK_FINISHED" then
         sentence.playbackFinished = true
         SetSentenceState(sentence, "completed")
-        session.utterances[utteranceID] = nil
-        session.completedTokens[sentence.index], session.completedUtterances[utteranceID] = true, true
+        session.completedUtterances[utteranceID] = true
         if sentence.index == session.lastChunk then CompleteSplitSession(self, session) end
     end
 end
@@ -999,8 +945,7 @@ local function HandleSplitEvent(self, event, utteranceID, status)
         return true
     end
     local session = self.CurrentSession
-    local buffer = session and session.mode == self.ReadingModes.SPLIT and session
-        or (not session and self.IdleSplitEvents)
+    local buffer = session or self.IdleSplitEvents
     if not buffer then return false end
     if event == "VOICE_CHAT_TTS_PLAYBACK_STARTED" then
         RememberStart(buffer, utteranceID)
@@ -1043,56 +988,17 @@ function TTS:OnBookmark(utteranceID, bookmark)
         return
     end
 
-    local sessionID, token = bookmark:match("^OUTLOUD:SPEECH:(%d+):(%w+)$")
-    sessionID = tonumber(sessionID)
-    local chunk = tonumber(token)
+    local sessionID, chunk = bookmark:match("^OUTLOUD:SPEECH:(%d+):(%d+)$")
+    sessionID, chunk = tonumber(sessionID), tonumber(chunk)
+    if not sessionID or not chunk or chunk < 1 then return end
 
-    if not sessionID or (token ~= "WHOLE" and (not chunk or chunk < 1)) then
-        return
-    end
-
-    if chunk then
-        self:OnSplitBookmark(sessionID, chunk, utteranceID, bookmark)
-        return
-    end
-
-    if self.CurrentSession and sessionID < self.CurrentSession.id then
-        Record("emergency-stop-skipped", self.CurrentSession.id, token, nil, utteranceID,
-            "full-mode-source-preserved stale-session=" .. sessionID)
-    end
-    local session = self:GetBookmarkSession(sessionID, chunk or token)
-    if not session or session.mode ~= self.ReadingModes.FULL then return end
-
-    if token ~= "WHOLE" then return end
-
-    if session.completedTokens[token] or session.completedUtterances[utteranceID] then
-        return
-    end
-    local identified = session.utterances[utteranceID]
-    if identified and identified ~= token then return end
-    session.utterances[utteranceID] = token
-
-    -- Only this matching bookmark proves ownership of a previously seen event.
-    local pending = session.pendingTerminals[utteranceID]
-    if pending then
-        session.pendingTerminals[utteranceID] = nil
-        self:OnEvent(pending.event, utteranceID, pending.status)
-        return
-    end
-
-    OutLoud:Debug("TTS playback identified: session:", sessionID, "chunk:", token, "utterance:", utteranceID)
-    NotifyPlaybackStarted(session)
-    if self.CurrentSession ~= session then return end
-    if not session.activeToken then
-        session.activeToken = token
-        NotifyTextProgress(self, session, token, 0)
-    end
+    self:OnSplitBookmark(sessionID, chunk, utteranceID, bookmark)
 end
 
 function TTS:OnEvent(event, utteranceID, bookmark)
     if event:match("^VOICE_CHAT_TTS_PLAYBACK_") then
         local sid, chunk, attemptID
-        if type(bookmark) == "string" then sid, chunk = bookmark:match("^OUTLOUD:SPEECH:(%d+):(%w+)$") end
+        if type(bookmark) == "string" then sid, chunk = bookmark:match("^OUTLOUD:SPEECH:(%d+):(%d+)$") end
         if type(utteranceID) == "number" and not sid then
             local owner = FindSplitOwner(self, utteranceID)
             if owner then sid, chunk, attemptID = owner.sessionID, owner.sentenceIndex, owner.id end
@@ -1108,7 +1014,7 @@ function TTS:OnEvent(event, utteranceID, bookmark)
             else
                 -- Store only native IDs/status and ownership markup, never arbitrary bookmark text.
                 local ownedMark = type(bookmark) == "string" and
-                    (bookmark:match("^OUTLOUD:SPEECH:%d+:%d+$") or bookmark:match("^OUTLOUD:SPEECH:%d+:WHOLE$")) or nil
+                    bookmark:match("^OUTLOUD:SPEECH:%d+:%d+$") or nil
                 self.EmergencyStopEvents[#self.EmergencyStopEvents + 1] = {
                     event = event, utteranceID = utteranceID, sessionID = session and session.id,
                     bookmark = ownedMark or (type(bookmark) == "number" and bookmark or nil),
@@ -1130,64 +1036,9 @@ function TTS:DispatchPlaybackEvent(event, utteranceID, bookmark)
     end
 
     if event == "VOICE_CHAT_TTS_PLAYBACK_BOOKMARK" then
-        if self.Stopping and type(bookmark) == "string" and bookmark:match(":WHOLE$") then return end
         self:OnBookmark(utteranceID, bookmark)
         return
     end
 
-    if HandleSplitEvent(self, event, utteranceID, bookmark) then return end
-    if self.Stopping then return end
-
-    -- STARTED alone cannot establish ownership or authorize prefetching.
-    local session = self.CurrentSession
-
-    if not session then
-        return
-    end
-
-    local token = session.utterances[utteranceID]
-    if token and session.completedTokens[token] then
-        session.utterances[utteranceID] = nil
-        session.completedUtterances[utteranceID] = true
-        return
-    end
-
-    if event == "VOICE_CHAT_TTS_PLAYBACK_STARTED" then
-        OutLoud:Debug("TTS PLAYBACK_STARTED: utterance:", tostring(utteranceID),
-            "owned:", token ~= nil, "Awaiting ownership bookmark if unidentified.")
-    elseif event == "VOICE_CHAT_TTS_PLAYBACK_FAILED" then
-        OutLoud:Debug("TTS PLAYBACK_FAILED: utterance:", tostring(utteranceID),
-            "status:", tostring(bookmark), "owned:", token ~= nil)
-        -- Without an ownership bookmark, a failure could belong to other TTS.
-        if token then
-            OutLoud:Error("TTS playback failed: session:", session.id, "status:", tostring(bookmark))
-            session.failed = true
-            self:Stop("playback-failed")
-        else
-            RememberTerminal(session, event, utteranceID, bookmark)
-            OutLoud:Debug("Failure is unidentified; retained pending a matching ownership bookmark.")
-        end
-    elseif event == "VOICE_CHAT_TTS_PLAYBACK_FINISHED" then
-        if not token then
-            RememberTerminal(session, event, utteranceID)
-            return
-        end
-        OutLoud:Debug("TTS playback finished: session:", session.id, "chunk:", token, "utterance:", utteranceID)
-        session.utterances[utteranceID] = nil
-        session.completedTokens[token] = true
-        session.completedUtterances[utteranceID] = true
-
-        if token == "WHOLE" then
-            session.finished = true
-            session.state, session.endReason, session.endedAt = "completed", "finished", Now()
-            self.CurrentSession = nil
-            if self.SplitHistory and #self.SplitHistory > 0 then
-                self.IdleSplitEvents = SplitBuffer()
-                CarryRecoveryEvidence(session, self.IdleSplitEvents)
-            end
-            Record("session-completed", session.id)
-            OutLoud:Debug("TTS session completed:", session.id)
-            NotifySessionEnded(session, "finished")
-        end
-    end
+    HandleSplitEvent(self, event, utteranceID, bookmark)
 end

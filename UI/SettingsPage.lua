@@ -112,7 +112,7 @@ function SettingsPage:UpdateScrollLayout()
     local scroll, content = self.ScrollFrame, self.Content
     content:SetWidth(math.max(1, scroll:GetWidth()))
 
-    if not self.SplitDescription then
+    if not self.AutoNarrateDescription then
         return
     end
 
@@ -124,8 +124,6 @@ function SettingsPage:UpdateScrollLayout()
     }) do
         description:SetWidth(descriptionWidth)
     end
-    self.FullDescription:SetWidth(descriptionWidth)
-    self.SplitDescription:SetWidth(descriptionWidth)
     if self.AutoNarrateDescription then
         self.AutoNarrateDescription:SetWidth(descriptionWidth)
     end
@@ -137,7 +135,7 @@ function SettingsPage:UpdateScrollLayout()
     end
 
     local lastDescription = self.SpeechRateDescription or self.AutoNarrationDelayDescription
-        or self.AutoNarrateDescription or self.SplitDescription
+        or self.AutoNarrateDescription
     local top, bottom = content:GetTop(), lastDescription:GetBottom()
     if top and bottom then
         content:SetHeight(math.max(1, top - bottom + 24))
@@ -564,92 +562,6 @@ function SettingsPage:CreateReadingSection(anchor)
 
     header.Title:SetText("Narration")
 
-    local modeLabel = self.Content:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-    modeLabel:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 10, -18)
-    modeLabel:SetText("Reading Mode")
-
-    local fullButton = CreateFrame(
-        "CheckButton",
-        nil,
-        self.Content,
-        "UIRadioButtonTemplate"
-    )
-
-    fullButton:SetPoint(
-        "TOPLEFT",
-        modeLabel,
-        "BOTTOMLEFT",
-        0,
-        -10
-    )
-
-    fullButton.text:SetFontObject(GameFontNormal)
-    fullButton.text:SetText("Read full text")
-
-    local fullDescription = self.Content:CreateFontString(
-        nil,
-        "ARTWORK",
-        "GameFontHighlightSmall"
-    )
-
-    fullDescription:SetPoint(
-        "TOPLEFT",
-        fullButton,
-        "BOTTOMLEFT",
-        21,
-        -5
-    )
-
-    fullDescription:SetWidth(620)
-    fullDescription:SetJustifyH("LEFT")
-    fullDescription:SetJustifyV("TOP")
-    fullDescription:SetWordWrap(true)
-
-    fullDescription:SetText(
-        "Sends the entire text to TTS in a single request. This provides more context to the voice model and usually produces more natural and consistent speech, but longer texts take more time to process before playback can begin."
-    )
-
-    local splitButton = CreateFrame(
-        "CheckButton",
-        nil,
-        self.Content,
-        "UIRadioButtonTemplate"
-    )
-
-    splitButton:SetPoint(
-        "TOPLEFT",
-        fullDescription,
-        "BOTTOMLEFT",
-        -21,
-        -16
-    )
-
-    splitButton.text:SetFontObject(GameFontNormal)
-    splitButton.text:SetText("Split text")
-
-    local splitDescription = self.Content:CreateFontString(
-        nil,
-        "ARTWORK",
-        "GameFontHighlightSmall"
-    )
-
-    splitDescription:SetPoint(
-        "TOPLEFT",
-        splitButton,
-        "BOTTOMLEFT",
-        21,
-        -5
-    )
-
-    splitDescription:SetWidth(620)
-    splitDescription:SetJustifyH("LEFT")
-    splitDescription:SetJustifyV("TOP")
-    splitDescription:SetWordWrap(true)
-
-    splitDescription:SetText(
-        "Splits the text into smaller parts and sends them to TTS sequentially. Playback can begin sooner, especially for longer texts, but the voice model receives less context and pauses or changes in delivery between parts may be more noticeable."
-    )
-
     -- Native checkbox used by Forever's modern Settings controls.
     ---@class OutLoudSettingsCheckbox : CheckButton
     ---@field Init fun(self: OutLoudSettingsCheckbox, value: boolean, initTooltip?: function)
@@ -658,8 +570,8 @@ function SettingsPage:CreateReadingSection(anchor)
     ---@field HoverBackground Texture
     local autoButton = CreateFrame("CheckButton", nil, self.Content, "SettingsCheckboxTemplate")
     ---@cast autoButton OutLoudSettingsCheckbox
-    autoButton:SetSize(fullButton:GetWidth(), fullButton:GetHeight())
-    autoButton:SetPoint("TOPLEFT", splitDescription, "BOTTOMLEFT", -21, -16)
+    autoButton:SetSize(self.SingleVoiceButton:GetWidth(), self.SingleVoiceButton:GetHeight())
+    autoButton:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 10, -18)
     -- Keep the modern artwork within the same bounds as the radio controls.
     for _, texture in ipairs({
         autoButton:GetNormalTexture(), autoButton:GetPushedTexture(),
@@ -739,40 +651,6 @@ function SettingsPage:CreateReadingSection(anchor)
     delayDescription:SetWordWrap(true)
     delayDescription:SetText(AUTO_DELAY_DESCRIPTION)
 
-    local function Refresh()
-        local mode = OutLoud.Database:GetReadingMode()
-
-        fullButton:SetChecked(
-            mode == OutLoud.TTS.ReadingModes.FULL
-        )
-
-        splitButton:SetChecked(
-            mode == OutLoud.TTS.ReadingModes.SPLIT
-        )
-    end
-
-    fullButton:SetScript("OnClick", function()
-        OutLoud.Database:SetReadingMode(
-            OutLoud.TTS.ReadingModes.FULL
-        )
-
-        Refresh()
-    end)
-
-    splitButton:SetScript("OnClick", function()
-        OutLoud.Database:SetReadingMode(
-            OutLoud.TTS.ReadingModes.SPLIT
-        )
-
-        Refresh()
-    end)
-
-    Refresh()
-
-    self.FullTextButton = fullButton
-    self.SplitTextButton = splitButton
-    self.FullDescription = fullDescription
-    self.SplitDescription = splitDescription
     self.AutoNarrateQuestsCheckbox = autoButton
     self.AutoNarrateDescription = autoDescription
     self.AutoNarrationDelaySlider = delayControl
