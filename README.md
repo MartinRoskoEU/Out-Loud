@@ -89,17 +89,17 @@ once, regardless of how many models use it. Assignments are saved between sessio
 ## Narration
 
 **Split Text** is the only supported reading mode. It reads sentence by sentence,
-submitting the first sentence 0.5 seconds after Talking Head starts opening and
+submitting the first sentence as Talking Head starts opening and
 prefetching one sentence ahead as playback begins.
 
 Talking Head displays the currently spoken sentence. Sentence changes use a brief
-text-only fade.
+fade shared by the text and its scrollbar.
 Overflowing text scrolls gently once playback begins and has a scrollbar for
 manual reading. Scrolling manually pauses automatic movement for that text.
 
 All Out Loud narration buttons use Split Text. Each valid request captures its
 dialogue and voice; later quest navigation does not cancel it. Speech is submitted
-0.5 seconds after Talking Head starts opening. Clicking again stops speech
+immediately when Talking Head starts opening. Clicking again stops speech
 immediately, finishes closing, then opens the latest requested dialogue.
 
 Enable **Automatically read quest text** in the same section to start narration
@@ -120,8 +120,8 @@ The mappings, saved voice configuration, voice resolver, Talking Head UI, TTS
 controller, manual QuestFrame, Quest Log and GossipFrame narration, and optional automatic
 QuestFrame narration are implemented.
 The user has manually tested the current snapshot-based Talking Head lifecycle
-successfully in WoW: Forever, including its intentional 0.5-second TTS submission
-delay. The dialogue text APIs and NPC voice resolver also have user-reported
+successfully in WoW: Forever. The subsequent immediate opening-start submission
+and synchronized scrollbar fading still require targeted in-game verification. The dialogue text APIs and NPC voice resolver also have user-reported
 in-game verification. These checks do not establish exhaustive correctness across
 all Settings controls, NPC appearances, voices, or native TTS cancellation edge cases.
 

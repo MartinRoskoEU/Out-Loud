@@ -3,8 +3,6 @@ local AddonName, OutLoud = ...
 local Narration = {}
 OutLoud.Narration = Narration
 
-local SUBMISSION_DELAY = 0.5
-
 local function Record(event, request, detail)
     local recorder = OutLoud.TTSDiagnostics
     if recorder and request then
@@ -13,18 +11,9 @@ local function Record(event, request, detail)
     end
 end
 
-local function CancelSubmission(request, reason)
-    local submission = request and request.submission
-    if not submission then return end
-    request.submission = nil
-    if submission.timer then submission.timer:Cancel() end
-    Record("narration-submission-cancelled", request, reason or "manual")
-end
-
 local function CancelRequest(self, reason)
     local request = self.Narration
     self.Narration = nil
-    CancelSubmission(request, reason)
     Record("narration-cancelled", request, reason or "manual")
 end
 
@@ -51,7 +40,6 @@ function Narration:Initialize()
 end
 
 function Narration:OnClosing(reason, diagnosticTrigger)
-    CancelSubmission(self.Narration, reason)
     if reason ~= "replaced" then
         -- Also handle direct TalkingHead:Hide(), without reopening its request.
         CancelRequest(self, reason)
@@ -77,25 +65,14 @@ function Narration:OnClosed()
     local request = self.Narration
     if not request or request.submitted or talkingHead.State ~= "Closed" then return end
     local ok, reason = talkingHead:Show(request.speaker, request.text, function(transition)
-        self:ScheduleSubmission(request, transition)
+        if not OwnsPresentation(self, request, transition) then return end
+        Record("narration-opening-started", request)
+        self:Submit(request, transition)
     end)
     if not ok and self.Narration == request then
         OutLoud:Error("Read stopped: Talking Head could not open:", tostring(reason))
         self:Stop(reason)
     end
-end
-
-function Narration:ScheduleSubmission(request, transition)
-    if not OwnsPresentation(self, request, transition) or request.submitted or request.submission then return end
-    Record("narration-opening-started", request)
-    local submission = {}
-    request.submission = submission
-    Record("narration-submission-scheduled", request, "delay=" .. SUBMISSION_DELAY)
-    submission.timer = C_Timer.NewTimer(SUBMISSION_DELAY, function()
-        if request.submission ~= submission then return end
-        request.submission = nil
-        self:Submit(request, transition)
-    end)
 end
 
 function Narration:Submit(request, transition)
@@ -123,7 +100,7 @@ function Narration:Submit(request, transition)
 end
 
 -- Capture once; navigation cannot change an accepted narration's content.
--- Returns acceptance, not the delayed native submission result.
+-- Returns acceptance; a replacement may wait for the current presentation to close.
 function Narration:Speak(unit, text, voiceID, displayTitle, diagnosticSource, modelFileID)
     self:Initialize()
     if not unit or not UnitExists(unit) then return false, "unit-unavailable" end
@@ -142,7 +119,6 @@ function Narration:Speak(unit, text, voiceID, displayTitle, diagnosticSource, mo
     -- Change ownership before native STOP can synchronously notify the outgoing session.
     local previous = self.Narration
     self.Narration = request
-    CancelSubmission(previous, "replaced")
     Record("narration-cancelled", previous, "replaced")
     Record("narration-requested", request, "unit=" .. unit .. " model=" .. tostring(modelFileID or "-"))
     local talkingHead = OutLoud.UI.TalkingHead

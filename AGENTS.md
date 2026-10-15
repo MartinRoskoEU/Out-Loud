@@ -164,9 +164,8 @@ Keep the existing public speech responsibilities separated:
 
 Do not add artificial delays unless in-game testing proves they are necessary.
 
-Preserve the intentional, manually validated 0.5-second narration submission delay
-measured from Talking Head opening start. This belongs to Narration, not sentence
-streaming inside the TTS controller.
+Narration submits TTS immediately when Talking Head opening begins, after any
+previous presentation has finished closing. Do not add a narration submission gate.
 
 ### Sentence streaming
 
@@ -183,7 +182,7 @@ The tested streaming behavior is:
 - prevent duplicate sentence submission
 
 Preserve this behavior unless a change is explicitly requested and then verified in-game.
-The timer-free streaming path starts after Narration's intentional 0.5-second gate.
+The timer-free streaming path starts when Narration receives Talking Head opening start.
 
 ### Quest integration
 
@@ -197,7 +196,7 @@ Quest-specific code should own:
 - passing captured narration data to the shared Narration coordinator
 
 The shared Narration coordinator owns request replacement, Talking Head lifecycle
-coordination, delayed TTS submission, and presentation callback ownership.
+coordination, immediate TTS submission at opening start, and presentation callback ownership.
 
 Do not move quest-specific logic into generic TTS modules.
 
@@ -514,7 +513,7 @@ Preserve these unless explicitly changed:
 - Split Text sentence streaming is the only supported reading mode.
 - Sentence streaming prefetches exactly one sentence ahead.
 - No artificial delay is used inside the tested sentence-streaming path.
-- Narration submits TTS 0.5 seconds after Talking Head opening begins; preserve this manually validated delay.
+- Narration submits TTS immediately when Talking Head opening begins, preserving close-then-open sequencing.
 - Talking Head is custom Out Loud UI using Blizzard-style assets.
 - Native SAPI registration remains manual.
 - WoW-dependent behavior requires in-game verification.

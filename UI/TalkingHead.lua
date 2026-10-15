@@ -65,6 +65,8 @@ function TalkingHead:Initialize()
     ---@field GetThumb fun(self: OutLoudTalkingHeadScrollBar): Button
     ---@field GetTrack fun(self: OutLoudTalkingHeadScrollBar): Frame
     ---@field UnregisterUpdate fun(self: OutLoudTalkingHeadScrollBar)
+    ---@field Back Button
+    ---@field Forward Button
     local scrollBar = CreateFrame("EventFrame", nil, textFrame, "MinimalScrollBar")
     ---@cast scrollBar OutLoudTalkingHeadScrollBar
     scrollBar:SetPoint("TOPLEFT", viewport, "TOPRIGHT", 8, -4)
@@ -133,12 +135,13 @@ function TalkingHead:Initialize()
         end
     end)
     viewport:SetScript("OnMouseWheel", function(_, delta)
+        if self.State ~= "Opening" and self.State ~= "Opened" then return end
         self:PauseAutoScroll()
         scrollBar:ScrollStepInDirection(-delta)
     end)
     scrollBar:RegisterCallback("OnScroll", function(_, percentage)
         -- Native SetScrollPercentage also emits OnScroll for programmatic updates.
-        if not self.SyncingScrollBar then
+        if not self.SyncingScrollBar and (self.State == "Opening" or self.State == "Opened") then
             self:PauseAutoScroll()
             self:SetTextScroll(percentage * (self.ScrollMax or 0))
         end
@@ -152,6 +155,7 @@ function TalkingHead:Initialize()
         scrollBar:UnregisterUpdate()
     end)
     frame:HookScript("OnHide", function()
+        self:SetScrollInteractionEnabled(false)
         self:StopTextFlow(true)
         if self.State ~= "Closed" then
             -- An external Hide must also invalidate an unfinished entrance.
@@ -169,7 +173,7 @@ function TalkingHead:Initialize()
     }
     self.AnimatedRegions = {
         self.Background, self.Model, self.PortraitBackground, self.PortraitFrame,
-        self.NameText, self.DialogText, self.CloseButton,
+        self.NameText, self.CloseButton,
     }
     for _, region in ipairs(self.Decorations) do
         self.AnimatedRegions[#self.AnimatedRegions + 1] = region
@@ -177,6 +181,17 @@ function TalkingHead:Initialize()
 
     self:ResetAnimations()
     self.Initialized = true
+end
+
+function TalkingHead:SetScrollInteractionEnabled(enabled)
+    self.TextViewport:EnableMouseWheel(enabled)
+    local scrollBar = self.TextScrollBar
+    scrollBar:EnableMouseWheel(enabled)
+    scrollBar:GetTrack():EnableMouse(enabled)
+    scrollBar:GetThumb():EnableMouse(enabled)
+    scrollBar.Back:EnableMouse(enabled)
+    scrollBar.Forward:EnableMouse(enabled)
+    if not enabled then scrollBar:UnregisterUpdate() end
 end
 
 function TalkingHead:StopAnimations()
@@ -189,6 +204,8 @@ function TalkingHead:ResetAnimations()
     self:StopTextFlow(true)
     self:StopAnimations()
     self.Frame:SetAlpha(1)
+    self.Frame.TextFrame:SetAlpha(0)
+    self:SetScrollInteractionEnabled(false)
     for _, region in ipairs(self.AnimatedRegions) do
         region:SetAlpha(0.01)
     end
@@ -274,6 +291,7 @@ function TalkingHead:Show(speaker, text, onOpening)
     self.Frame:Show()
     if self.State ~= "Opening" or self.Transition ~= transition then return true end
     self:SetLoading(true)
+    self:SetScrollInteractionEnabled(true)
     for _, group in ipairs(self.FadeInGroups) do
         group:Play()
     end
@@ -439,9 +457,12 @@ function TalkingHead:OnTextProgress(text, chunk)
         self.PlaybackActive = false
         self.ManualScrollPaused = false
         local textFrame = self.Frame.TextFrame
-        textFrame.Fadein:Stop()
-        textFrame.SentenceIn:Stop()
         if not textFrame.SentenceOut:IsPlaying() then
+            local alpha = textFrame:GetAlpha()
+            textFrame.Fadein:Stop()
+            textFrame.SentenceIn:Stop()
+            textFrame:SetAlpha(alpha)
+            textFrame.SentenceOut.Alpha:SetFromAlpha(alpha)
             local transition, sentenceTransition = self.Transition, {}
             self.SentenceTransition = sentenceTransition
             textFrame.SentenceOut:SetScript("OnFinished", function()
@@ -455,6 +476,7 @@ function TalkingHead:OnTextProgress(text, chunk)
                 self:SetDisplayedText(pending.text)
                 self.ManualScrollPaused = pending.manualScrollPaused
                 self.PlaybackActive = true
+                textFrame:SetAlpha(0)
                 textFrame.SentenceIn:Play()
                 self:StartAutoScroll()
             end)
@@ -475,10 +497,10 @@ function TalkingHead:FinishTextPlayback(reason)
         end
         self:UpdateTextLayout()
     end
+    local textFrame = self.Frame.TextFrame
+    local alpha = textFrame:GetAlpha()
     self:StopTextFlow(reason ~= "finished")
-    if reason == "finished" and self.State == "Opened" then
-        self.DialogText:SetAlpha(1)
-    end
+    textFrame:SetAlpha(alpha)
 end
 
 function TalkingHead:SetLoading(isLoading)
@@ -497,6 +519,7 @@ function TalkingHead:Hide(reason, diagnosticTrigger)
     if self.State == "Closed" or self.State == "Closing" then return end
     local transition = {}
     self.State, self.Transition = "Closing", transition
+    self:SetScrollInteractionEnabled(false)
     self.Frame.MainFrame.TalkingHeadsInAnim:SetScript("OnFinished", nil)
     -- Invalidate opening first; native STOP may synchronously emit playback events.
     OutLoud.Narration:OnClosing(reason, diagnosticTrigger)
@@ -510,9 +533,13 @@ function TalkingHead:Hide(reason, diagnosticTrigger)
         self.Spinner:Hide()
     end
 
+    local textFrame = self.Frame.TextFrame
+    local alpha = textFrame:GetAlpha()
     self:StopTextFlow(reason ~= "finished")
     -- Native Stop resets Scale/Translation effects before the one-second exit.
     self:StopAnimations()
+    textFrame:SetAlpha(alpha)
+    textFrame.Close.Alpha:SetFromAlpha(alpha)
     for _, region in ipairs(self.Decorations) do
         region:SetAlpha(0)
     end

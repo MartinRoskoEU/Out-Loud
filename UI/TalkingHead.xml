@@ -24,7 +24,8 @@
                     </AnimationGroup>
                 </Animations>
             </Frame>
-            <Frame parentKey="TextFrame" setAllPoints="true" useParentLevel="true">
+            <!-- Text and native scrollbar inherit one animated opacity. -->
+            <Frame parentKey="TextFrame" setAllPoints="true" useParentLevel="true" alpha="0">
                 <Frames>
                     <ScrollFrame parentKey="Scroll">
                         <Anchors>
@@ -37,7 +38,7 @@
                                 <Size x="1" y="1" />
                                 <Layers>
                                     <Layer level="ARTWORK">
-                                        <FontString parentKey="Text" inherits="GameFontHighlightLarge" alpha="0.01" justifyH="LEFT" justifyV="TOP">
+                                        <FontString parentKey="Text" inherits="GameFontHighlightLarge" justifyH="LEFT" justifyV="TOP">
                                             <Anchors>
                                                 <Anchor point="TOPLEFT" />
                                             </Anchors>
@@ -51,16 +52,16 @@
                 </Frames>
                 <Animations>
                     <AnimationGroup parentKey="Fadein" setToFinalAlpha="true">
-                        <Alpha childKey="Scroll.Content.Text" startDelay="0.75" duration="0.25" order="1" fromAlpha="0" toAlpha="1" />
+                        <Alpha parentKey="Alpha" startDelay="0.75" duration="0.25" order="1" fromAlpha="0" toAlpha="1" />
                     </AnimationGroup>
                     <AnimationGroup parentKey="Close" setToFinalAlpha="true">
-                        <Alpha childKey="Scroll.Content.Text" startDelay="0" duration="1" order="1" fromAlpha="1" toAlpha="0" />
+                        <Alpha parentKey="Alpha" startDelay="0" duration="1" order="1" fromAlpha="1" toAlpha="0" />
                     </AnimationGroup>
                     <AnimationGroup parentKey="SentenceOut" setToFinalAlpha="true">
-                        <Alpha childKey="Scroll.Content.Text" duration="0.08" order="1" fromAlpha="1" toAlpha="0" />
+                        <Alpha parentKey="Alpha" duration="0.08" order="1" fromAlpha="1" toAlpha="0" />
                     </AnimationGroup>
                     <AnimationGroup parentKey="SentenceIn" setToFinalAlpha="true">
-                        <Alpha childKey="Scroll.Content.Text" duration="0.08" order="1" fromAlpha="0" toAlpha="1" />
+                        <Alpha parentKey="Alpha" duration="0.08" order="1" fromAlpha="0" toAlpha="1" />
                     </AnimationGroup>
                 </Animations>
             </Frame>

@@ -1,7 +1,7 @@
 -- Execute only with explicit user approval, from the addon root with Lua 5.1: lua Tests/TTS.lua
 -- The harness records addon calls; it models no native queue or stop acknowledgements.
 -- Event inputs check Lua reactions, not guaranteed WoW ordering, timing, or survival.
--- The timer-free controller checks do not cover Narration's intentional 0.5-second delay.
+-- Coordinator ownership and opening-start submission are checked separately in Tests/Narration.lua.
 local LoadFile = assert(rawget(_G, "loadfile"), "Run tests with standalone Lua 5.1")
 
 local function Equal(actual, expected, message)
