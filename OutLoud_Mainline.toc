@@ -1,0 +1,30 @@
+## Interface: 120105
+## Title: Out Loud
+## Notes: Text-to-speech addon for World of Warcraft: Retail
+## Author: Nendis
+## Version: 0.1.0
+## SavedVariables: OutLoudRetailDB
+## LoadSavedVariablesFirst: 1
+
+Core\Namespace.lua
+Clients\Retail\Config.lua
+Core\Client.lua
+Clients\Retail\VoiceMappings.lua
+Core\NPCInspection.lua
+Core\VoiceSelection.lua
+Core\Database.lua
+Core\TTSDiagnostics.lua
+Core\TTS.lua
+Core\Narration.lua
+
+UI\Controls\ComboBox.lua
+UI\Controls\VoiceRow.lua
+UI\SettingsPage.lua
+UI\TalkingHead.xml
+UI\TalkingHead.lua
+UI\QuestIntegration.lua
+UI\QuestLogIntegration.lua
+UI\GossipIntegration.lua
+UI\ItemTextIntegration.lua
+
+Core\Init.lua

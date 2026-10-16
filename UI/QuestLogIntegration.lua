@@ -24,7 +24,7 @@ function QuestLogIntegration:GetCurrentText()
         return nil, "quest-log-index-unavailable"
     end
 
-    -- Forever's verified API: use only the first return value, never objectives.
+    -- Also present in Retail QuestMapFrame.lua; never speak the objectives return.
     local description = GetQuestLogQuestText(questIndex)
     if type(description) ~= "string" or not description:find("%S") then
         return nil, "quest-description-unavailable"
@@ -75,7 +75,7 @@ end
 function QuestLogIntegration:Initialize()
     if self.Initialized then return end
 
-    -- The Forever/Camelot TOC loads the shared Mainline QuestMapFrame layout.
+    -- Both inspected clients use the Mainline QuestMapFrame detail layout.
     local frame = rawget(_G, "QuestMapFrame")
     local details = frame and frame.DetailsFrame
     local header = details and details.BackFrame
@@ -83,7 +83,10 @@ function QuestLogIntegration:Initialize()
     local scroll = details and details.ScrollFrame
     if not frame or not details or not header or not back or not scroll
         or type(QuestMapFrame_ShowQuestDetails) ~= "function"
-        or type(QuestMapFrame_CloseQuestDetails) ~= "function" then
+        or type(QuestMapFrame_CloseQuestDetails) ~= "function"
+        or not C_QuestLog or type(C_QuestLog.GetSelectedQuest) ~= "function"
+        or type(C_QuestLog.GetLogIndexForQuestID) ~= "function"
+        or type(GetQuestLogQuestText) ~= "function" then
         if not self.LoadFrame then
             self.LoadFrame = CreateFrame("Frame")
             self.LoadFrame:RegisterEvent("ADDON_LOADED")

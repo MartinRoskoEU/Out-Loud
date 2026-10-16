@@ -44,11 +44,13 @@ function Database:Initialize()
         return
     end
 
-    local db = OutLoudDB
+    -- Forever keeps its original table; Retail never reads or migrates it.
+    local savedVariables = OutLoud.Client and OutLoud.Client.SavedVariables or "OutLoudDB"
+    local db = _G[savedVariables]
 
     if type(db) ~= "table" then
         db = {}
-        OutLoudDB = db
+        _G[savedVariables] = db
     end
 
     if type(db.voices) ~= "table" then

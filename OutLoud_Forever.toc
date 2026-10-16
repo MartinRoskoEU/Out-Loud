@@ -6,9 +6,10 @@
 ## SavedVariables: OutLoudDB
 ## LoadSavedVariablesFirst: 1
 
-Data\VoiceMappings.lua
-
 Core\Namespace.lua
+Clients\Forever\Config.lua
+Core\Client.lua
+Clients\Forever\VoiceMappings.lua
 Core\NPCInspection.lua
 Core\VoiceSelection.lua
 Core\Database.lua

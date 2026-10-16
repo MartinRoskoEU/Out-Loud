@@ -208,7 +208,10 @@ function ItemTextIntegration:Initialize()
     local frame = rawget(_G, "ItemTextFrame")
     local scroll = rawget(_G, "ItemTextScrollFrame")
     local nextButton, prevButton = rawget(_G, "ItemTextNextPageButton"), rawget(_G, "ItemTextPrevPageButton")
-    if not frame or not scroll or not nextButton or not prevButton then
+    if not frame or not scroll or not nextButton or not prevButton
+        or type(ItemTextGetItem) ~= "function" or type(ItemTextGetPage) ~= "function"
+        or type(ItemTextGetText) ~= "function" or type(ItemTextHasNextPage) ~= "function"
+        or type(ItemTextNextPage) ~= "function" then
         if not self.LoadFrame then
             self.LoadFrame = CreateFrame("Frame")
             self.LoadFrame:RegisterEvent("ADDON_LOADED")

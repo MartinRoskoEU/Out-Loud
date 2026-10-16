@@ -117,7 +117,8 @@ function VoiceSelection:ResolvePlayer()
     info.sex = UnitSex("player")
     info.gender = GetGender(info.sex)
 
-    local familyKey = playerRaceFamilies[info.raceToken]
+    local clientFamilies = OutLoud.Client and OutLoud.Client.PlayerRaceFamilies
+    local familyKey = (clientFamilies and clientFamilies[info.raceToken]) or playerRaceFamilies[info.raceToken]
     info.family = familyKey and OutLoud.VoiceMappings.Families[familyKey]
     if not info.family then
         info.reason = "unknown-player-race"

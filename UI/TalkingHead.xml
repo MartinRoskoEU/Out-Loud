@@ -1,4 +1,5 @@
-<!-- Independent visual template based on Blizzard_FrameXML/TalkingHeadUI.xml.
+<!-- Independent visual template based on Blizzard_FrameXML/TalkingHeadUI.xml,
+     inspected in Forever and Retail (12.1.5.70391). Both use these native atlases.
      Name/text timer offsets from TalkingHeadUI.lua are cancellable animation delays. -->
 <Ui xmlns="http://www.blizzard.com/wow/ui/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.blizzard.com/wow/ui/ ..\Blizzard_SharedXML\UI.xsd">
     <Frame name="OutLoudTalkingHeadTemplate" virtual="true" hidden="true" frameStrata="BACKGROUND" frameLevel="1">

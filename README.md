@@ -1,8 +1,9 @@
 # Out Loud
 
-Out Loud is a World of Warcraft: Forever addon in development for reading quest
+Out Loud is an addon in development for World of Warcraft: Forever and Retail, reading quest
 and NPC gossip text, books, letters, scrolls, and other readable items aloud with
-configurable voices.
+configurable voices. Both clients use shared narration code with separate builds,
+voice catalogs, saved settings, and release versions.
 
 ## Overview
 
@@ -91,6 +92,12 @@ Unavailable selections are indicated without erasing the stored setting.
 Available families come from generated mapping data. Each unique family appears
 once, regardless of how many models use it. Assignments are saved between sessions.
 
+Forever provides 12 families and 26 model mappings. Retail provides 27 families
+and 60 model mappings. Retail's Human and Gilnean selectors remain available even
+though the verified export has no unambiguous NPC models for them. Unresolved NPCs
+follow the existing player narrator fallback; player Humans can use their Human
+voice assignment independently of NPC models.
+
 ## Narration
 
 **Split Text** is the only supported reading mode. It reads sentence by sentence,
@@ -122,6 +129,12 @@ requests without restarting current playback.
 
 ## Project Status
 
+Both client builds start at version 0.1.0 and are independently versioned. Retail
+integration has been checked against Blizzard UI source for 12.1.5; it still
+requires manual in-game verification. Forever retains its existing Talking Head
+appearance and placement. Retail uses the same verified native graphical assets
+at the same top anchor and offset as Forever, retaining its existing scale and higher frame strata.
+
 The mappings, saved voice configuration, voice resolver, Talking Head UI, TTS
 controller, manual QuestFrame, Quest Log and GossipFrame narration, and optional automatic
 QuestFrame narration are implemented. Readable-item narration is also integrated;
@@ -150,6 +163,21 @@ The addon separates voice resolution, speech, and presentation:
 - One reusable NPC inspection model serves both quest and gossip voice resolution.
 
 ## Development
+
+For direct development, junction each client's `Interface/AddOns/OutLoud` to this
+same source directory. The explicit root TOCs are `OutLoud_Forever.toc` for Forever
+and `OutLoud_Mainline.toc` for Retail. No deployment or copying is needed.
+
+Build both installable packages with Python 3.10 or later:
+
+```sh
+python tools/package.py
+```
+
+The ZIP files in `dist/` each contain an `OutLoud` directory. Install the matching
+client package in that client's `Interface/AddOns` folder. Forever keeps its
+existing `OutLoudDB` preferences; Retail saves to `OutLoudRetailDB`. Existing
+assignments for families outside the active catalog are retained.
 
 Debug logging is off by default and resets after login or `/reload`. Use
 `/outloud debug on`, `/outloud debug off`, or `/outloud debug` to enable, disable,

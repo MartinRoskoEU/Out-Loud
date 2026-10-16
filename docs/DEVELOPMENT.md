@@ -3,10 +3,211 @@
 Implementation reference, approved logic checks, and in-game diagnostic helpers for
 [Out Loud](../README.md). See the main README for capabilities and project status.
 
+## Client builds, versions, and distribution
+
+There is one shared Core/UI implementation. `Clients/<client>/Config.lua` selects
+the saved table and Talking Head presentation; the corresponding `VoiceMappings.lua`
+contains only the verified export. No generator application was accessed or changed.
+
+| Client | Authoritative version and TOC input | Packaged TOC | SavedVariables | Target interface |
+| --- | --- | --- | --- | --- |
+| Forever | `OutLoud_Forever.toc` | `OutLoud_Forever.toc` | `OutLoudDB` | `16001` (1.60.1) |
+| Retail | `OutLoud_Mainline.toc` | `OutLoud_Mainline.toc` | `OutLoudRetailDB` | `120105` (12.1.5) |
+
+Each TOC's `## Version` is its client's single authoritative addon version source;
+both initial public versions are 0.1.0. Change only the selected TOC's version when
+releasing that client. The packager reads that version for ZIP names, manifest
+metadata, and the proposed tag; the installed TOC receives the same bytes with
+normalized line endings. Versions are independent of the WoW game/interface version.
+There are no release tags created by the build. Tag conventions are
+`forever/v0.1.0` and `retail/v0.1.0`; later tags use the selected version.
+
+Both authoritative TOCs live at the repository root. Junction each client's
+`Interface/AddOns/OutLoud` to this same source directory. The explicit client TOCs
+are `OutLoud_Forever.toc` for Forever and `OutLoud_Mainline.toc` for Retail. No build,
+deployment, or file copying is required for development. Do not keep duplicate
+TOCs under `Clients`.
+
+The user reported Retail displaying the Forever description and an out-of-date
+warning with the previous `OutLoud_Standard.toc` plus `OutLoud.toc` fallback layout.
+Those two filenames have been removed in favor of the explicit client TOCs.
+Each Out Loud TOC loads only its own client configuration and models,
+with Namespace first and Init last. Packaging includes only the selected root TOC
+and that client's files, preserving the same load order and SavedVariables as direct
+development. Static checks cover this layout; actual client TOC selection has not
+been verified in-game as part of this change.
+
+From this repository with Python 3.10+ and no third-party build dependencies:
+
+```sh
+python tools/package.py
+python tools/package.py --client Forever
+python tools/package.py --client Retail
+```
+
+The default command produces `dist/OutLoud-Forever-0.1.0.zip` and
+`dist/OutLoud-Retail-0.1.0.zip`, plus a `.manifest.json` beside each ZIP. Every archive
+contains only the `OutLoud/` directory with its selected TOC, required client files,
+shared runtime/UI resources, diagnostics, and README. Tests, development reference
+exports, tools, Git files, and the other client's files are excluded. File selection
+is an explicit TOC allowlist, with recursive XML Script/Include dependency handling.
+
+The offline build validates metadata, client/settings agreement, exact load order,
+required file existence, XML parsing, ZIP integrity, and installed bytes. Archives
+use sorted names, UTF-8 text with LF line endings, fixed timestamps and permissions,
+and stored ZIP entries to avoid zlib-version differences. The same source produces
+identical ZIP bytes; the build serializes twice and compares. Each external manifest
+records archive/file SHA-256 hashes, version, proposed tag, TOC, and classification.
+It is a local audit artifact, not an upload API request. `dist/` is Git-ignored.
+
+On 2026-10-17, CurseForge's own project pages showed **Forever / 1.60.1** on
+[ForeverForge](https://www.curseforge.com/wow/addons/foreverforge) and
+**Retail / 12.1.5** on
+[Deadly Boss Mods](https://www.curseforge.com/wow/addons/deadly-boss-mods).
+The latter page lists both Retail and Forever files on one project, establishing
+that separate client files can share a project. Upload the two ZIPs independently
+to the same Out Loud project and select only each build's matching flavor/game
+version. Do not classify Forever as Classic Era merely because its interface starts
+with 1. These display classifications are recorded by the packager; no unverified
+`wow_forever` upload identifier or numeric version ID is invented. The authenticated
+version API returned HTTP 401 during inspection, so API IDs remain unverified and
+are unnecessary for manual uploads. Recheck available versions before publishing.
+No upload, publication, tag, deployment, or SAPI registration is automated.
+
+Files added for the dual-client implementation:
+
+- `Clients/Forever/Config.lua`, `Clients/Forever/VoiceMappings.lua`.
+- `Clients/Retail/Config.lua`, `Clients/Retail/VoiceMappings.lua`,
+  `OutLoud_Forever.toc`, `OutLoud_Mainline.toc`.
+- `Core/Client.lua`, `tools/package.py`, `Tests/Clients.lua`, `Tests/Build.py`.
+
+Files modified: `Core/Database.lua`, `Core/Init.lua`, `Core/VoiceSelection.lua`,
+`UI/TalkingHead.lua`, `UI/TalkingHead.xml`, `UI/QuestIntegration.lua`,
+`UI/QuestLogIntegration.lua`, `UI/ItemTextIntegration.lua`,
+`Tests/VoiceSelection.lua`, `.gitignore`, `README.md`, `AGENTS.md`, and this guide.
+The superseded `Data/VoiceMappings.lua` was removed after moving the data contract
+to the two client exports. `Core/TTS.lua`, `Core/Narration.lua`, diagnostics, and
+Settings components were preserved; neither native TTS nor generator code changed.
+
+## Client compatibility evidence and limits
+
+Retail source inspection uses Blizzard UI code mirrored at Gethe/wow-ui-source,
+commit `18c6d677b605b312f3d813d498404631fb941977`, whose
+[version.txt](https://github.com/Gethe/wow-ui-source/blob/18c6d677b605b312f3d813d498404631fb941977/version.txt)
+identifies **12.1.5.70391**. References below use that immutable revision:
+
+- [TalkingHeadUI.xml](https://github.com/Gethe/wow-ui-source/blob/18c6d677b605b312f3d813d498404631fb941977/Interface/AddOns/Blizzard_FrameXML/TalkingHeadUI.xml)
+  and its adjacent Lua show the same portrait/text/background child structure,
+  TalkingHeads atlases, Fancy22Font, close button, entrance effects, and one-second
+  closing fades used by our independent visual template. Both client configurations
+  use TOP/-60 through the shared Talking Head initializer. Retail retains scale 1
+  and HIGH strata; Forever keeps scale 1.05 and BACKGROUND strata. The previous
+  Retail BOTTOM/96 configuration caused its bottom placement. This positioning
+  change was checked statically only; it was not verified in-game. Our scrollable
+  sentence display, fade callbacks, STOP,
+  and native LoadingSpinnerTemplate remain shared. Blizzard's live TalkingHeadFrame,
+  C_TalkingHead, Edit Mode registration, and managed alert/event behavior are not
+  inherited. This is Out Loud's independent presentation, not an Edit Mode element.
+- [Mainline QuestFrame.lua](https://github.com/Gethe/wow-ui-source/blob/18c6d677b605b312f3d813d498404631fb941977/Interface/AddOns/Blizzard_UIPanels_Game/Mainline/QuestFrame.lua)
+  and XML expose the same detail/progress/reward panels, text getters, questnpc
+  portrait token, and QUEST_DETAIL/PROGRESS/COMPLETE handlers. No Retail-specific
+  alternate extraction or event-delay path was needed. Actual event ordering and
+  model availability remain client checks.
+- [QuestMapFrame.lua](https://github.com/Gethe/wow-ui-source/blob/18c6d677b605b312f3d813d498404631fb941977/Interface/AddOns/Blizzard_UIPanels_Game/Mainline/QuestMapFrame.lua)
+  and XML retain DetailsFrame.BackFrame.BackButton, ScrollFrame, questID, show/close
+  helpers, selected quest APIs, and GetQuestLogQuestText(logIndex). Quest Log keeps
+  its player narrator, description-only extraction, and header button. Missing
+  APIs/frames defer integration instead of hooking an incomplete UI.
+- Adjacent [ItemTextFrame.lua](https://github.com/Gethe/wow-ui-source/blob/18c6d677b605b312f3d813d498404631fb941977/Interface/AddOns/Blizzard_UIPanels_Game/Mainline/ItemTextFrame.lua)
+  and [GossipFrame.lua](https://github.com/Gethe/wow-ui-source/blob/18c6d677b605b312f3d813d498404631fb941977/Interface/AddOns/Blizzard_UIPanels_Game/Mainline/GossipFrame.lua)
+  retain the item text/page functions and native navigation buttons, and the gossip
+  GreetingPanel.GoodbyeButton/Update path. Shared hooks remain after Blizzard's
+  handlers. Item integration also checks required functions before installation.
+- [Blizzard_SettingControls.xml](https://github.com/Gethe/wow-ui-source/blob/18c6d677b605b312f3d813d498404631fb941977/Interface/AddOns/Blizzard_Settings_Shared/Blizzard_SettingControls.xml)
+  and adjacent Lua confirm the shared section headers, native checkbox with
+  HoverBackground, dropdown with steppers, and slider usage. Rows derive from the
+  active Families catalog and content height follows the final row. No separate
+  Retail Settings UI or new preferences are needed.
+- [VoiceChatDocumentation.lua](https://github.com/Gethe/wow-ui-source/blob/18c6d677b605b312f3d813d498404631fb941977/Interface/AddOns/Blizzard_APIDocumentationGenerated/VoiceChatDocumentation.lua)
+  documents the same GetTtsVoices, SpeakText(voiceID, text, rate, volume, overlap),
+  StopSpeakingText, ownership bookmark event arguments, and playback events.
+  TTSSettingsDocumentation retains the separator boolean setting. The existing TTS
+  controller is unchanged. Retail startup explicitly reports missing required TTS,
+  texture, or Settings APIs and leaves Loaded false instead of starting partially.
+
+Voice data validation checks every exported family/model pair, not just counts:
+Forever **12/26**, Retail **27/60**. HUMAN/GILNEAN remain Retail Settings identities
+with no NPC models. IDs 1000764/1011653 remain unmapped there and use the existing
+Quest/Gossip player fallback. Human player narration still resolves via UnitRace.
+The new verified Forever export replaces the older catalog: NAGA replaces DRAENEI,
+TROLL gains 118798/232863, and obsolete mappings such as Human 1793470 are removed.
+Old assignments are retained as inactive values; the exact requested catalog is not
+expanded with legacy fallback rows. Multiple Voices on a Forever Draenei player
+therefore has no active family in this export. No settings reset or schema migration
+is performed. Unavailable voice IDs remain visible as unavailable until reassigned.
+
+Retail player-family extensions are in its Config.lua. Shared-family allied race
+tokens use their existing exported family; gender still comes only from UnitSex.
+There is no speculative Dracthyr-to-VISAGE player alias or Skyborne player token.
+An unmapped player race cannot supply the Multiple Voices fallback; select Single
+Voice for that character. Gilnean's selector is retained for catalog completeness
+without assigning an ambiguous Human model to it. Custom/third-party quest and
+gossip windows are outside the standard Blizzard integrations.
+
+**Standalone verification passed; in-game verification was not performed.**
+Approved checks for this task covered production Lua 5.1 syntax; the existing
+VoiceSelection, TTS, Narration, ItemText, and Debug logic suites; new dual-client
+catalog/settings/fallback-forwarding checks; and static release tests. The latter
+validate exact exports, client file selection/order, shared bytes, rejected invalid
+TOCs, independent version changes and saved tables, ZIP contents, and deterministic
+serialization. Existing API doubles exercise addon logic, never authoritative
+client queues, rendering, event ordering, or audio. No new simulated WoW client
+environment was built.
+
+Re-run only with task-specific approval:
+
+```sh
+python Tests/Build.py
+lua Tests/Clients.lua
+lua Tests/VoiceSelection.lua
+lua Tests/TTS.lua
+lua Tests/Narration.lua
+lua Tests/ItemText.lua
+lua Tests/Debug.lua
+```
+
+Lua checks require Lua 5.1 and run from the addon root. During this task the installed
+`lupa.lua51.LuaRuntime` ran these same files because no lua executable was on PATH;
+no dependencies were installed. Python's packaging tests need only the standard library.
+
+Before either public release, manually verify in its actual game client:
+
+1. Addon loading, independent saved settings through reload, voice enumeration,
+   all family rows (including Retail Human/Gilnean), disabled controls, and scrolling.
+2. Quest offer/progress/reward narration, hidden greeting controls, Auto Play and
+   delay cancellation, questnpc UnitSex/model readiness, and fallback for ambiguous
+   models or unresolved gender. Check the Retail player race token for each
+   playable race used, particularly Earthen/Haranir.
+3. Quest Log description selection and button positioning, gossip updates, and
+   item next/previous navigation, page continuation, empty pages, and closing.
+4. Native portrait loading, factions/atlases/fonts, spinner, client placement,
+   long sentence scrolling, sentence fades, and coexistence with Blizzard UI.
+5. Audible speech, bookmark timing, one-sentence prefetch, rapid replacement,
+   STOP during opening/playback/closing, and reload/logout cancellation. Retail's
+   native TTS API documentation supports Windows XML bookmarks; native behavior
+   on other platforms is unverified.
+
+Retail's unit documentation also marks identity values as secret when restricted.
+This port does not claim combat/restricted-data support or change the established
+speech controller to interpret secret payloads. Verify normal quest/gossip contexts
+outside combat first. Source inspection and standalone tests cannot establish
+runtime permissions, voice availability, rendering, audio, or native cancellation.
+
 ## Runtime modules and initialization
 
-Runtime services use singleton tables in the `OutLoud` namespace. `OutLoud.toc`
-loads generated data, Core services, UI components, and initialization in order.
+Runtime services use singleton tables in the `OutLoud` namespace. Each client's TOC
+loads the namespace, client configuration, generated data, Core services, UI
+components, and initialization in order.
 On addon load, initialization prepares the database, Options, Talking Head UI,
 and QuestFrame/Quest Log/GossipFrame integrations. `Core/Narration.lua` shares
 presentation ownership and TTS callbacks between these UI entry points.
@@ -28,7 +229,8 @@ it unregisters and clears its handler when the required Blizzard UI globals exis
   voice ID using the same numeric ID convention as existing family assignments.
   The schema adds no migration and does not rewrite the family assignment table.
   Switching modes preserves both settings and never calls TTS start/stop.
-- `Data/VoiceMappings.lua` contains `VoiceMappings.Families` and direct
+- `Clients/Forever/VoiceMappings.lua` and `Clients/Retail/VoiceMappings.lua` contain
+  client-specific `VoiceMappings.Families` and direct
   `VoiceMappings.Models[FileDataID]` family mappings. It can be replaced with
   generator output and contains no gender data or addon runtime helpers.
 - Options derives its rows from unique `VoiceMappings.Families` values, including
@@ -41,7 +243,8 @@ it unregisters and clears its handler when the required Blizzard UI globals exis
 - In Multiple Voices mode, `OutLoud.VoiceSelection:ResolvePlayer()` uses the locale-stable token from
   `UnitRace("player")`, checks its explicit mapping against `VoiceMappings.Families`,
   and combines that family with `UnitSex("player")` and the existing database.
-  It requires no inspection model. Unknown race tokens, unknown sex, and unset
+  Retail adds player race tokens through its configuration without changing
+  Forever's token table. It requires no inspection model. Unknown race tokens, unknown sex, and unset
   voices return no voice, with a reason; there is no fallback for custom races.
 
 Both resolvers select the assignment mode inside `VoiceSelection`. Single Voice
@@ -914,7 +1117,7 @@ Explicit player token mappings are:
 | `Gnome` | `GNOME` |
 | `Troll` | `TROLL` |
 | `BloodElf` | `BLOOD_ELF` |
-| `Draenei` | `DRAENEI` |
+| `Draenei` | `DRAENEI` (Retail catalog only) |
 | `Goblin` | `GOBLIN` |
 
 No speculative Forever/custom race aliases, including a player token for
@@ -1002,8 +1205,9 @@ the local export at
 `DevResources/BlizzardInterfaceCode/Interface/AddOns/Blizzard_FrameXML/TalkingHeadUI.xml`
 and sequencing from the adjacent `TalkingHeadUI.lua`. Out Loud does not instantiate
 Blizzard's live `TalkingHeadFrame` or attach its conversation/model mixins.
-The root retains size 570 by 155 and scale 1.05. It is centered horizontally,
-anchored to `UIParent`'s top with a Y offset of -60, on the `BACKGROUND` strata.
+The root retains size 570 by 155. Both clients center it horizontally,
+anchored to `UIParent`'s top with a Y offset of -60. Forever keeps scale 1.05 and
+`BACKGROUND` strata; Retail keeps scale 1 and `HIGH` strata.
 Faction atlas selection uses captured speaker data; name colors, text styling,
 and internal text anchors follow the Blizzard reference. Player portraits keep
 `SetUnit("player")`; NPC portraits use the captured model asset described above.

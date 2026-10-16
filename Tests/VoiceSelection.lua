@@ -28,7 +28,7 @@ local function Load(path)
     setfenv(chunk, environment)
     chunk("OutLoud", addon)
 end
-for _, path in ipairs({ "Core/Namespace.lua", "Data/VoiceMappings.lua",
+for _, path in ipairs({ "Core/Namespace.lua", "Clients/Forever/Config.lua", "Clients/Forever/VoiceMappings.lua",
     "Core/VoiceSelection.lua", "Core/Database.lua" }) do
     Load(path)
 end

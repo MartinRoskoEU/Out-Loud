@@ -3,14 +3,15 @@ local AddonName, OutLoud = ...
 local QuestIntegration = {}
 OutLoud.UI.QuestIntegration = QuestIntegration
 
--- Verified Forever events; only this OnEvent path can start automatic narration.
+-- Verified Forever events, also present in Retail source. Only this OnEvent path
+-- can start automatic narration; Retail delivery/order requires a client check.
 local autoNarrationEvents = {
     QUEST_DETAIL = "GetQuestText",
     QUEST_PROGRESS = "GetProgressText",
     QUEST_COMPLETE = "GetRewardText",
 }
 
--- Panel names from the Forever UI export; text APIs verified in-game by the user.
+-- Panel names shared by both inspected exports; Forever text APIs verified in-game.
 local dialoguePanels = {
     {
         name = "QuestFrameDetailPanel", textSource = "GetQuestText",

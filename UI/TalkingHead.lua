@@ -35,15 +35,10 @@ function TalkingHead:Initialize()
     frame:SetAlpha(1)
     frame:SetSize(570, 155)
     frame:ClearAllPoints()
-    frame:SetPoint(
-        "TOP",
-        UIParent,
-        "TOP",
-        0,
-        -60
-    )
-    frame:SetScale(1.05)
-    frame:SetFrameStrata("BACKGROUND")
+    local presentation = OutLoud.Client.TalkingHead
+    frame:SetPoint(presentation.point, UIParent, presentation.point, 0, presentation.offsetY)
+    frame:SetScale(presentation.scale)
+    frame:SetFrameStrata(presentation.strata)
     frame:SetFrameLevel(1)
 
     local main = frame.MainFrame

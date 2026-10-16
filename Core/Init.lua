@@ -8,6 +8,14 @@ frame:SetScript("OnEvent", function(_, event, loadedAddonName)
         return
     end
 
+    local compatible, reason = OutLoud.Client:CheckCompatibility()
+    if not compatible then
+        OutLoud:Error(reason)
+        frame:UnregisterEvent("ADDON_LOADED")
+        frame:SetScript("OnEvent", nil)
+        return
+    end
+
     OutLoud:RegisterSlashCommands()
     OutLoud.Database:Initialize()
     OutLoud.VoiceSelection:Initialize()

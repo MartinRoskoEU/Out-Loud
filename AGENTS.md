@@ -2,7 +2,7 @@
 
 ## Project
 
-This repository contains **Out Loud**, a World of Warcraft: Forever addon in development for quest text-to-speech narration.
+This repository contains **Out Loud**, an addon in development for World of Warcraft: Forever and Retail quest text-to-speech narration.
 
 The addon is built around these responsibilities:
 
@@ -78,7 +78,7 @@ Keep responsibilities separated.
 
 ### Voice mappings
 
-`Data/VoiceMappings.lua` is generated data.
+`Clients/Forever/VoiceMappings.lua` and `Clients/Retail/VoiceMappings.lua` are generated data.
 
 Its runtime responsibility is conceptually:
 
@@ -134,6 +134,9 @@ then:
 The current settings identity is conceptually:
 
 `OutLoudDB.voices[family][sex]`
+
+Forever preserves that original table. Retail uses `OutLoudRetailDB.voices[family][sex]`.
+Never migrate or copy numeric voice assignments between clients automatically.
 
 Do not assume a Voice Family has a numeric DB2 RaceID.
 
@@ -519,3 +522,30 @@ Preserve these unless explicitly changed:
 - WoW-dependent behavior requires in-game verification.
 
 When uncertain, preserve existing working behavior and report the uncertainty instead of inventing a solution.
+
+## Dual-client builds and releases
+
+- Shared Core/UI modules remain the source of narration, streaming, STOP, Auto Play,
+  Settings, and item page-turning behavior. Isolate proven differences in `Clients`.
+- The authoritative addon versions are the `## Version` fields in `OutLoud_Forever.toc`
+  (Forever) and `OutLoud_Mainline.toc` (Retail). Update independently.
+- Keep both TOCs at the repository root for direct junction-based development.
+  Use the explicit Forever and Mainline client suffixes. Do not add an unsuffixed
+  `OutLoud.toc` fallback, `OutLoud_Standard.toc`, or duplicate TOCs under `Clients`.
+  Packages include only their selected TOC and client files.
+- Use `python tools/package.py` for deterministic, allowlisted packages. It never
+  creates tags, registers native components, uploads, or publishes.
+- Tags are `forever/v<version>` and `retail/v<version>`; never create/push automatically.
+- Preserve the `VoiceMappings.Families` / `VoiceMappings.Models` contract. Retail
+  HUMAN/GILNEAN have no exported NPC models but remain Settings families. Never
+  assign ambiguous Retail IDs 1000764/1011653 to either family.
+- The 12/26 Forever and 27/60 Retail catalogs are the user-supplied verified
+  generator exports. Do not access the separate generator application for addon work.
+- Retail's source-inspected native Talking Head structure/atlases can share the
+  independent visual template. Client config owns placement/scale/strata; do not
+  inherit Blizzard's live TalkingHeadFrame, event mixins, or Edit Mode system.
+- Confirm CurseForge flavor/version in its current catalog before distribution.
+  Display labels are not API flavor identifiers; never invent identifiers.
+- Test approval remains task-specific. Static/logic checks do not prove native
+  Retail UI, unit/model readiness, events, audio/bookmark timing, or cancellation.
+- See `docs/DEVELOPMENT.md` for build commands, source evidence, and manual checks.
