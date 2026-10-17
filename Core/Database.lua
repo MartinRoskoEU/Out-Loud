@@ -8,6 +8,8 @@ Database.SingleVoiceAssignments = {
     CHARACTER = "perCharacter",
 }
 
+Database.NarrationSources = { "quest", "gossip", "itemText" }
+
 Database.AutoNarrationDelay = {
     DEFAULT = 2,
     MIN = 0,
@@ -67,9 +69,16 @@ function Database:Initialize()
         db.voices = {}
     end
 
-    if db.autoNarrateQuests == nil then
-        db.autoNarrateQuests = false
+    if type(db.autoPlay) ~= "table" then db.autoPlay = {} end
+    if type(db.autoClose) ~= "table" then db.autoClose = {} end
+    for _, source in ipairs(self.NarrationSources) do
+        -- Fill only missing values; newer source preferences win over legacy data.
+        if db.autoPlay[source] == nil then
+            db.autoPlay[source] = db.autoNarrateQuests == true
+        end
+        if db.autoClose[source] == nil then db.autoClose[source] = true end
     end
+    db.autoNarrateQuests = nil
     -- Retire the obsolete preference without resetting other saved settings.
     db.readingMode = nil
     db.voiceMode = NormalizeVoiceMode(db.voiceMode)
@@ -152,12 +161,29 @@ function Database:ResetCharacterSingleVoice()
     self.CharacterDB.singleVoice = nil
 end
 
-function Database:GetAutoNarrateQuests()
-    return self.DB.autoNarrateQuests == true
+function Database:GetAutoPlay(source)
+    return self.DB.autoPlay[source] == true
 end
 
-function Database:SetAutoNarrateQuests(enabled)
-    self.DB.autoNarrateQuests = enabled == true
+function Database:SetAutoPlay(source, enabled)
+    if self.DB.autoPlay[source] == nil then return end
+    self.DB.autoPlay[source] = enabled == true
+end
+
+function Database:HasAutoPlay()
+    for _, source in ipairs(self.NarrationSources) do
+        if self:GetAutoPlay(source) then return true end
+    end
+    return false
+end
+
+function Database:GetAutoClose(source)
+    return self.DB.autoClose[source] == true
+end
+
+function Database:SetAutoClose(source, enabled)
+    if self.DB.autoClose[source] == nil then return end
+    self.DB.autoClose[source] = enabled == true
 end
 
 function Database:GetAutoNarrationDelay()

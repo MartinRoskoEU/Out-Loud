@@ -114,7 +114,7 @@ for _, client in ipairs({ "Forever", "Retail" }) do
         Equal(reason, "Retail API unavailable: C_VoiceChat.GetTtsVoices")
         local function APIInput() error("Compatibility predicates must not call native APIs") end
         environment.C_VoiceChat = { GetTtsVoices = APIInput, SpeakText = APIInput, StopSpeakingText = APIInput }
-        environment.C_TTSSettings = { SetSetting = APIInput }
+        environment.C_TTSSettings = { GetSetting = APIInput, SetSetting = APIInput }
         environment.C_Texture = { GetAtlasExists = APIInput }
         environment.Settings = { RegisterCanvasLayoutCategory = APIInput, RegisterAddOnCategory = APIInput }
         environment.Enum = { TtsBoolSetting = { PlaySoundSeparatingChatLineBreaks = 0 } }

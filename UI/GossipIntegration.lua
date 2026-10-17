@@ -1,6 +1,6 @@
 local AddonName, OutLoud = ...
 
-local GossipIntegration = {}
+local GossipIntegration = { SettingsSource = "gossip" }
 OutLoud.UI.GossipIntegration = GossipIntegration
 
 local function IsUsableVoiceID(voiceID)
@@ -50,7 +50,7 @@ function GossipIntegration:CaptureAutoNarration()
 end
 
 function GossipIntegration:IsAutoNarrationCurrent(request)
-    return self.AutoNarrationDialogue == request and OutLoud.Database:GetAutoNarrateQuests()
+    return self.AutoNarrationDialogue == request and OutLoud.Database:GetAutoPlay(self.SettingsSource)
         and SameDialogue(request, self:CaptureAutoNarration())
 end
 
@@ -65,14 +65,14 @@ function GossipIntegration:Refresh()
     if not dialogue then return end
     OutLoud.Narration:ScheduleAutoNarration(self, dialogue,
         function(pending) return self:IsAutoNarrationCurrent(pending) end,
-        function() self:StartCurrentNarration() end)
+        function() self:StartCurrentNarration(true) end)
 end
 
 function GossipIntegration:OnHidden()
     -- Only the whole frame closes narration; greeting/options can change in place.
     if self.Frame:IsShown() then return end
     self.AutoNarrationDialogue = nil
-    OutLoud.Narration:StopSource(self, "gossip-closed")
+    OutLoud.Narration:CloseSource(self, "gossip-closed")
     self:UpdateButtonVisibility()
 end
 
@@ -81,14 +81,20 @@ function GossipIntegration:OnTTSStop(reason)
     if reason ~= "finished" then self:CancelPendingAutoNarration() end
 end
 
-function GossipIntegration:StartCurrentNarration()
-    local ok, message = pcall(self.SpeakCurrentText, self)
+function GossipIntegration:OnAutoPlayChanged(source)
+    if source == self.SettingsSource and not OutLoud.Database:GetAutoPlay(source) then
+        OutLoud.Narration:OnAutoPlayDisabled(self)
+    end
+end
+
+function GossipIntegration:StartCurrentNarration(automatic)
+    local ok, message = pcall(self.SpeakCurrentText, self, automatic)
     if not ok then
         OutLoud:Error("Gossip read failed with Lua error:", tostring(message))
     end
 end
 
-function GossipIntegration:SpeakCurrentText()
+function GossipIntegration:SpeakCurrentText(automatic)
     self:CancelPendingAutoNarration()
     -- Both activation paths capture current text/name; delayed data is only a guard.
     local text, reason = self:GetCurrentText()
@@ -129,7 +135,7 @@ function GossipIntegration:SpeakCurrentText()
         return
     end
 
-    return OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitle, "Gossip", info.modelFileID, nil, self)
+    return OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitle, "Gossip", info.modelFileID, nil, self, automatic)
 end
 
 function GossipIntegration:Initialize()
@@ -176,10 +182,8 @@ function GossipIntegration:Initialize()
     goodbye:HookScript("OnShow", Refresh)
     goodbye:HookScript("OnHide", Refresh)
 
-    hooksecurefunc(OutLoud.Database, "SetAutoNarrateQuests", function()
-        if not OutLoud.Database:GetAutoNarrateQuests() then
-            self:CancelPendingAutoNarration()
-        end
+    hooksecurefunc(OutLoud.Database, "SetAutoPlay", function(_, source)
+        self:OnAutoPlayChanged(source)
     end)
     hooksecurefunc(OutLoud.Narration, "Speak", function() self:CancelPendingAutoNarration() end)
     hooksecurefunc(OutLoud.Narration, "Stop", function() self:CancelPendingAutoNarration() end)

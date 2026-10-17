@@ -13,10 +13,10 @@ while speech is generated and played.
 
 Manual Out Loud buttons connect current quest and gossip dialogue to the NPC's voice, or
 selected Quest Log descriptions to the player's voice, Talking Head, and speech.
-QuestFrame, NPC gossip and readable-item narration can also start automatically when enabled in Options;
-Quest Log narration remains manual. Closing a narration's source window stops its
-speech and closes Talking Head. Talking Head also closes when narration ends,
-and the loading spinner clears when owned playback begins.
+QuestFrame, NPC gossip and readable-item narration each have independent Auto Play
+and Auto Close settings. Quest Log narration remains manual. By default, closing
+a narration's source window stops its speech and closes Talking Head. Talking Head
+also closes when narration ends, and the loading spinner clears when owned playback begins.
 
 ## Current Features
 
@@ -30,8 +30,9 @@ and the loading spinner clears when owned playback begins.
   controllable loading spinner.
 - A speech controller that accepts supplied text and a WoW TTS voice ID,
   streams sentences and can cancel narration.
-- Optional automatic narration for quest offer, progress, reward pages and readable
-  NPC gossip, disabled by default. Manual buttons remain available.
+- Independent **Quest**, **Gossip**, and **Item Text** checkboxes for Auto Play
+  (off by default) and Auto Close (on by default), with one shared Auto Play Delay.
+  Manual buttons remain available.
 - A manual **Out Loud** button for quest offer, progress, and reward dialogue.
   Single Voice shows the player portrait and quest title. Multiple Voices uses
   the NPC portrait/name, with the existing player fallback, and reads the same dialogue.
@@ -48,7 +49,8 @@ and the loading spinner clears when owned playback begins.
 - An **Out Loud** button near the bottom-right of readable item pages. It uses
   the player's configured voice and reads from the displayed page onward. Each
   page finishes before the addon turns to the next; manual Next/Prev navigation
-  switches narration to the selected page. Closing the item stops its narration.
+  switches narration to the selected page. Closing an item always ends page
+  advancement; captured speech can continue when its Auto Close setting is off.
 
 ## How Voice Selection Works
 
@@ -123,15 +125,20 @@ dialogue and voice; later quest navigation does not cancel it. Speech is submitt
 immediately when Talking Head starts opening. Clicking again stops speech
 immediately, finishes closing, then opens the latest requested dialogue.
 
-Enable **Automatically read quest, gossip and item text** in the same section to start
-narration when quest details, progress, reward pages, readable NPC gossip, or readable
-items open. It defaults to off and does not apply to Quest Log. **Automatic narration
-delay** waits before automatically opening Talking Head for quests, gossip and readable
-items, starting when their text is ready. Gossip text changes restart this delay;
-closing the dialogue, manual playback, STOP, or another narration source cancels it.
-The delay defaults to 2 seconds, adjustable
-from 0 to 5 seconds in 0.5-second steps. Manual requests skip this delay; item page
-continuation adds no extra delay. All use the same Talking Head opening/closing lifecycle.
+Enable **Quest**, **Gossip**, or **Item Text** under **Auto Play** to start
+narration independently for those sources. Quest includes offer, progress and reward
+pages; Gossip also reads subsequent text changes. New profiles default to off;
+existing global Auto Play preferences are preserved for all three sources. Quest
+Log remains manual. **Auto Play Delay** is shared across the three sources and
+starts when text is ready. It defaults to 2 seconds, adjustable from 0 to 5 seconds
+in 0.5-second steps. Manual playback and item page continuation skip this delay.
+Disabling a source cancels its pending automatic playback.
+
+**Auto Close** provides the same three source checkboxes, enabled by default.
+Disabling one lets captured speech continue when that source window closes.
+Closed items never advance pages. Quest stage changes, Gossip submenus, and item
+page navigation keep their existing narration flow. Manual STOP and the Talking
+Head close button always stop narration; Quest Log keeps its existing lifecycle.
 
 **Speech Rate** adjusts narration speed from -10 (Slower) to +10 (Faster) in
 integer steps. The default is 0 (Normal), restored with **Reset to 0**. It is

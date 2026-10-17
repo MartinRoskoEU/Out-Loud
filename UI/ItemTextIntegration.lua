@@ -1,6 +1,6 @@
 local AddonName, OutLoud = ...
 
-local ItemTextIntegration = {}
+local ItemTextIntegration = { SettingsSource = "itemText" }
 OutLoud.UI.ItemTextIntegration = ItemTextIntegration
 
 local function SamePage(first, second)
@@ -59,7 +59,8 @@ function ItemTextIntegration:StartPage(reading, page)
     end
 
     local current = { page = page }
-    reading.current, reading.waiting, reading.expectedPage = current, nil, nil
+    local automatic = reading.activationPending
+    reading.current, reading.waiting, reading.expectedPage, reading.activationPending = current, nil, nil, nil
     current.onEnded = function(reason)
         self:OnPageEnded(reading, current, reason)
     end
@@ -67,7 +68,7 @@ function ItemTextIntegration:StartPage(reading, page)
     local starting = self.StartingPage
     self.StartingPage = reading
     local called, ok, reason = pcall(OutLoud.Narration.Speak, OutLoud.Narration, "player", page.text, voiceID, page.title,
-        "Item Text", nil, current.onEnded, self)
+        "Item Text", nil, current.onEnded, self, automatic)
     self.StartingPage = starting
     if not called then
         if self.Reading == reading then self:CancelReading("lua-error", true) end
@@ -80,11 +81,11 @@ function ItemTextIntegration:StartPage(reading, page)
     end
 end
 
-function ItemTextIntegration:SpeakCurrentText()
+function ItemTextIntegration:SpeakCurrentText(automatic)
     local page = self.ReadyPage
     if not self:IsPageCurrent(page) then return false, "item-text-not-ready" end
     self:CancelReading("replaced", true)
-    local reading = { item = self.Item }
+    local reading = { item = self.Item, activationPending = automatic == true }
     self.Reading = reading
     self:StartPage(reading, page)
     return self.Reading == reading
@@ -93,7 +94,7 @@ end
 function ItemTextIntegration:ScheduleAutoNarration(page)
     OutLoud.Narration:ScheduleAutoNarration(self, { page = page },
         function(pending) return self:IsPageCurrent(pending.page) end,
-        function() self:SpeakCurrentText() end)
+        function() self:SpeakCurrentText(true) end)
 end
 
 function ItemTextIntegration:OnPageEnded(reading, current, reason)
@@ -120,12 +121,14 @@ end
 
 function ItemTextIntegration:OnManualNavigation(direction)
     if not self.Frame:IsShown() then return end
-    local resume = self.Reading ~= nil or OutLoud.Database:GetAutoNarrateQuests()
+    local continuing = self.Reading ~= nil and not self.Reading.activationPending and not self.Reading.silent
+    local resume = continuing or OutLoud.Database:GetAutoPlay(self.SettingsSource)
     local number = ItemTextGetPage()
     self:CancelReading("item-page-changed", true)
     self.ReadyPage = nil
-    if resume and type(number) == "number" then
-        self.Reading = { item = self.Item, waiting = true, expectedPage = number + direction }
+    if type(number) == "number" then
+        self.Reading = { item = self.Item, waiting = true, expectedPage = number + direction,
+            activationPending = resume and not continuing, silent = not resume }
     end
     self:UpdateButtonVisibility()
 end
@@ -142,7 +145,7 @@ function ItemTextIntegration:OnReady()
         self:UpdateButtonVisibility()
         return
     end
-    local autoStart = not self.HasReady and self.AutoPlayPending and OutLoud.Database:GetAutoNarrateQuests()
+    local autoStart = not self.HasReady and self.AutoPlayPending and OutLoud.Database:GetAutoPlay(self.SettingsSource)
     self.HasReady = true
     self.AutoPlayPending = nil
     local reading = self.Reading
@@ -151,7 +154,9 @@ function ItemTextIntegration:OnReady()
     OutLoud.Narration:CancelAutoNarration(self)
     self.ReadyPage = page
     self:UpdateButtonVisibility()
-    if reading and reading.item == self.Item and reading.waiting then
+    if reading and reading.silent then
+        self.Reading = nil
+    elseif reading and reading.item == self.Item and reading.waiting then
         self:StartPage(reading, page)
     elseif reading then
         -- Also catch native navigation that did not originate from a page button.
@@ -171,15 +176,18 @@ function ItemTextIntegration:OnEvent(event)
     elseif event == "ITEM_TEXT_READY" then
         self:OnReady()
     elseif event == "ITEM_TEXT_CLOSED" then
-        self:OnHidden()
+        self:OnHidden(true)
     end
 end
 
-function ItemTextIntegration:OnHidden()
+function ItemTextIntegration:OnHidden(closed)
     if self.Frame:IsShown() then return end
+    -- A page request may temporarily hide the UI before ITEM_TEXT_READY.
+    -- ITEM_TEXT_CLOSED confirms real closure even while waiting for that page.
+    if not closed and self.Reading and self.Reading.waiting then return end
     self:CancelReading("item-text-closed", false)
     self.Item, self.ReadyPage, self.HasReady, self.AutoPlayPending = nil, nil, nil, nil
-    OutLoud.Narration:StopSource(self, "item-text-closed")
+    OutLoud.Narration:CloseSource(self, "item-text-closed")
     if self.Button then self.Button:Hide() end
 end
 
@@ -203,6 +211,16 @@ end
 
 function ItemTextIntegration:OnTTSStartSession()
     if not self:IsStartingPage() then self:CancelReading("replaced", false) end
+end
+
+function ItemTextIntegration:OnAutoPlayChanged(source)
+    if source ~= self.SettingsSource or OutLoud.Database:GetAutoPlay(source) then return end
+    OutLoud.Narration:OnAutoPlayDisabled(self)
+    self.AutoPlayPending = nil
+    -- Existing readings (including manual ones) still continue between pages.
+    if self.Reading and self.Reading.activationPending then
+        self.Reading.activationPending, self.Reading.silent = nil, true
+    end
 end
 
 function ItemTextIntegration:Initialize()
@@ -249,11 +267,8 @@ function ItemTextIntegration:Initialize()
     -- Runs after Blizzard has updated text, layout, page controls and frame visibility.
     frame:HookScript("OnEvent", function(_, event) self:OnEvent(event) end)
     frame:HookScript("OnHide", function() self:OnHidden() end)
-    hooksecurefunc(OutLoud.Database, "SetAutoNarrateQuests", function()
-        if not OutLoud.Database:GetAutoNarrateQuests() then
-            OutLoud.Narration:CancelAutoNarration(self)
-            self.AutoPlayPending = nil
-        end
+    hooksecurefunc(OutLoud.Database, "SetAutoPlay", function(_, source)
+        self:OnAutoPlayChanged(source)
     end)
     hooksecurefunc(OutLoud.Narration, "Speak", function()
         local request = OutLoud.Narration.Narration

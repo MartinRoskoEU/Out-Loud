@@ -423,8 +423,8 @@ Speak methods return `true` when submission succeeds, or `false` plus a reason:
 `invalid-text`, `invalid-voice`, `no-sentences`, or `speech-failed`. A supplied
 voice ID must be a nonnegative integer; `0` is valid. Rate comes from
 `Database:GetSpeechRate()` on each request (default `0`), volume is `100`, and
-overlap is `false`. Initialization creates the event frame once and
-disables Blizzard's line-separator sound once.
+overlap is `false`. Initialization creates the event frame once without changing
+WoW's global TTS settings.
 
 ## Sessions, cancellation, and known limitations
 
@@ -842,9 +842,11 @@ return and unowned playback-start events do not clear it. TTS does not depend on
 the UI.
 Changing quest stages updates button visibility and may cancel an automatic
 activation that has not yet captured a narration request. Whole-window closure
-calls `Narration:StopSource(owner, reason)`, cancelling that source's delayed
-activation and stopping its accepted request through the existing `Stop()` path.
-This also cancels a request waiting for an earlier presentation's closing animation.
+calls `Narration:CloseSource(owner, reason)`, cancelling that source's delayed
+activation. With its Auto Close enabled, `StopSource` stops only its accepted
+request through the existing `Stop()` path, including requests waiting for an
+earlier presentation's closing animation. With Auto Close disabled, accepted
+speech remains captured. Quest Log continues to use unconditional `StopSource`.
 A close from another source does not stop the current owner. Accepted snapshots
 remain captured during navigation within a visible source. The Talking Head close button calls `Narration:Stop()` to
 clear active/pending presentation ownership and scheduled automatic narration,
@@ -971,7 +973,11 @@ pattern if Blizzard's UI is not available yet. Its 100 by 22 `UIPanelButtonTempl
 button anchors to the bottom-right of `ItemTextScrollFrame`, outside the scrolling
 content. The native frame's OnEvent post-hook captures text after Blizzard handles
 `ITEM_TEXT_READY`. BEGIN establishes a fresh item identity, even for identical
-titles; CLOSED and OnHide invalidate that identity and stop only owned item speech.
+titles. Whole-window closure invalidates that identity and page continuation;
+Auto Close controls whether it also stops the owned speech request. OnHide while
+waiting for a requested page is treated as navigation; ITEM_TEXT_CLOSED confirms
+closure even during that wait. A closure notification while the frame is shown
+is ignored, preserving a reopened/current page.
 
 The user verified `ItemTextGetItem`, `ItemTextGetPage`, `ItemTextGetText`,
 `ItemTextHasNextPage`, `ItemTextNextPage`, and `ITEM_TEXT_READY` in Forever.
@@ -980,9 +986,8 @@ The Old Gods and the Ordering of Azeroth retrieved all 2,570 characters without
 skips in about 1.94 seconds. That test collected pages asynchronously; production
 never preloads a book and does not use its `_G.OutLoudBookPageTest.fullText` result.
 
-The existing `OutLoudDB.autoNarrateQuests` boolean also enables readable-item
-Auto Play. No settings key is added or renamed. The label now mentions quest and
-item text. Automatic items wait for `Database:GetAutoNarrationDelay()` after the
+Readable-item Auto Play uses `Database:GetAutoPlay("itemText")`, independently
+of quests and gossip. Automatic items wait for `Database:GetAutoNarrationDelay()` after the
 first displayed page becomes ready, before opening Talking Head. Quest and item
 activation share `Narration:ScheduleAutoNarration(owner, request, isCurrent, start)`
 and `CancelAutoNarration(owner)`, extracted from the existing quest timer path.
@@ -1033,8 +1038,11 @@ no TTS session exists. Own startup is recognized both during the immediate
 `Stop("replaced")` and `StartSession` notifications from cancelling continuation
 when manual navigation waits for Talking Head to finish closing. Explicit STOP
 still cancels, including while a page is submitting or awaiting readiness.
-Closing ItemTextFrame stops only its owned request and leaves unrelated narration
-alone. A page request already sent to Blizzard cannot be withdrawn; cancellation invalidates its narration continuation.
+Closing ItemTextFrame always clears its continuation state. With Item Text Auto
+Close enabled it also stops only its owned request, leaving unrelated narration
+alone. With it disabled, captured speech may finish, but its detached completion
+callback cannot turn pages or consume later readiness. A page request already sent
+to Blizzard cannot be withdrawn; cancellation invalidates its narration continuation.
 
 SimpleHTML layout tags are removed from the page payload and common named HTML
 entities are decoded. The original API text is retained only for current-page
@@ -1057,11 +1065,69 @@ audible completion behavior. Verify in Forever:
   any gamepad navigation/binding paths in use. PreClick/event behavior and actual
   native audio cancellation still need client verification.
 
-### Automatic QuestFrame narration
+### Source Auto Play, Auto Close, and quest activation
 
-`OutLoudDB.autoNarrateQuests` defaults to `false` when absent; existing saved
-values and voice settings are preserved. Database access uses
-`GetAutoNarrateQuests()` and `SetAutoNarrateQuests(enabled)`.
+`Database:GetAutoPlay(source)` / `SetAutoPlay(source, enabled)` and
+`GetAutoClose(source)` / `SetAutoClose(source, enabled)` use `quest`, `gossip`, and
+`itemText` identities. They store booleans in `autoPlay[source]` and
+`autoClose[source]` within the existing client profile: `OutLoudDB` for Forever,
+`OutLoudRetailDB` for Retail. No master switches or source-specific delays exist.
+`HasAutoPlay()` determines whether the shared delay slider is enabled.
+
+On initialization, each missing Auto Play value inherits the legacy
+`autoNarrateQuests == true` preference (absent/false means off). Existing source
+values, including false, take precedence. The legacy key is then retired. Each
+missing Auto Close value defaults to true. Reinitialization/reload preserves
+source values and table identities; voices and unrelated settings are retained.
+Migration never reads or copies the other client's profile.
+
+Each integration owns `SettingsSource` and its existing activation predicate.
+Disabling a source cancels only its pending timer, pre-readiness activation, and
+accepted automatic request that has not submitted TTS yet. The coordinator marks
+initial automatic requests explicitly; it relinquishes an unsubmitted one through
+its existing request-cancellation helper without a global STOP that could cancel
+another source's delay. Manual requests and submitted speech remain active.
+Gossip's observed-dialogue identity is retained so disabling/repeated refreshes
+cannot replay the same response. Item Text distinguishes pending activation from
+an ongoing reading: disabling Auto Play suppresses an unstarted navigation read,
+but ongoing manual/automatic readings still continue between pages.
+
+`Narration:CloseSource` always cancels that source's delay. Its Auto Close flag
+controls whether the existing owner-checked `StopSource` is invoked. False leaves
+accepted requests intact, including ones awaiting the previous closing animation.
+Quest Log still uses its original unconditional close path. Explicit STOP and
+Talking Head closure are unchanged, as are presentation animations.
+
+Item Text uses the existing waiting/expected-page state to preserve transient
+hides during both narrated and silent Next/Previous navigation. Silent navigation
+updates the ready page without starting speech. Confirmed ITEM_TEXT_CLOSED while
+the frame is hidden detaches continuation regardless of Auto Close. Item completion
+also requires the captured page to remain current and the frame to be shown.
+No closure timers, new Blizzard APIs, event frames, or duplicate hooks were added.
+
+Targeted standalone logic/static validation passed (Lua 5.1 via the installed
+`lupa.lua51.LuaRuntime`, plus Python):
+
+```sh
+lua Tests/SourceSettings.lua
+lua Tests/SourceClosure.lua
+lua Tests/ItemText.lua
+lua Tests/Gossip.lua
+lua Tests/Narration.lua
+lua Tests/Narrator.lua
+python Tests/Settings.py
+```
+
+These cover both clients' settings migration/isolation, source activation and
+closure flags, manual playback, Gossip changes/deduplication, item manual and
+automatic navigation, hidden deferred readiness, actual-close inputs during pending
+activation/page loading, accepted requests awaiting presentation, STOP, stale
+callbacks, and source replacement. Changed Lua files also compile under Lua 5.1.
+No frames are constructed or native events/queues/audio simulated by these checks.
+No in-game testing was performed. Native Settings layout, event ordering and audio
+remain unverified for this change. In particular, distinguishing a transient item
+hide from closure while waiting relies on the existing ITEM_TEXT_CLOSED path;
+source inspection and supplied logic inputs do not prove its native ordering.
 
 `OutLoudDB.autoNarrationDelay` stores seconds, defaulting to `2`. Database access
 uses `GetAutoNarrationDelay()` and `SetAutoNarrationDelay(delay)`. Initialization
@@ -1069,10 +1135,11 @@ and the setter clamp numeric values to 0–5 and round to the nearest 0.5-second
 step; invalid values use the default. Valid existing values are preserved.
 `Database.AutoNarrationDelay` supplies the shared default, bounds, and step.
 
-The Settings section is labelled **Narration** and starts with the
-**Automatically read quest, gossip and item text** checkbox, followed by automatic delay and speech
-rate controls. It has no reading-mode selector or redundant single-choice control.
-The checkbox uses
+The Settings page shows **Auto Play** with Quest, Gossip and Item Text
+checkboxes, the shared **Auto Play Delay**, then **Auto Close** with the same
+three checkboxes. Speech Rate and TTS Separator Sound follow. There is no
+reading-mode selector. A shared checkbox helper reuses the existing artwork,
+label hit area and hover behavior for all these controls. The helper uses
 `SettingsCheckboxTemplate`, `SettingsCheckboxMixin:Init()`, and its
 `OnValueChanged` callback from the local Forever export's
 `Blizzard_Settings_Shared/Blizzard_SettingControls.xml` and `.lua`. Its tooltip
@@ -1080,16 +1147,32 @@ handlers and large hover highlight are disabled; interaction covers only the
 checkbox and label. The visible description shares the existing description
 font/wrapping and is included in the page's scroll height.
 
-Below it, **Automatic narration delay** uses `MinimalSliderWithSteppersTemplate`
+**TTS Separator Sound** uses the same checkbox styling in Forever and Retail.
+It reads `C_TTSSettings.GetSetting(Enum.TtsBoolSetting.PlaySoundSeparatingChatLineBreaks)`
+when created and whenever the checkbox is shown. A user toggle immediately calls
+`C_TTSSettings.SetSetting` with the same enum and the checkbox's boolean value:
+checked enables the sound, unchecked disables it. Its description identifies the
+effect on WoW's global TTS behavior. There is no addon default, initialization
+write, or SavedVariables copy of this setting.
+The API boolean signatures are source-inspected in Blizzard's
+[Forever TTS settings documentation](https://github.com/Gethe/wow-ui-source/blob/15666a6e67938a1ab5caf041406464251db111ca/Interface/AddOns/Blizzard_APIDocumentationGenerated/TTSSettingsDocumentation.lua)
+and [Retail TTS settings documentation](https://github.com/Gethe/wow-ui-source/blob/18c6d677b605b312f3d813d498404631fb941977/Interface/AddOns/Blizzard_APIDocumentationGenerated/TTSSettingsDocumentation.lua).
+
+Targeted static checks: `python Tests/Settings.py`. These inspect source wiring,
+both TOCs, and scroll layout without constructing frames or calling WoW APIs.
+Lua 5.1 compilation also passed for changed Lua files. No in-game testing was
+performed for this control; native rendering and sound behavior remain unverified.
+
+Below the Auto Play checkboxes, **Auto Play Delay** uses `MinimalSliderWithSteppersTemplate`
 from `Blizzard_SharedXML/Shared/Slider/MinimalSlider.xml` and `.lua`, the same
 control used by native Settings sliders. `Init(value, min, max, steps, formatters)`
 receives 10 steps across 0–5 seconds. The right-label formatter displays values
 such as `0 s`, `0.5 s`, and `2 s`; `OnValueChanged` saves changes. `SetEnabled()`
-disables both the slider and its stepper buttons when automatic narration is off.
+disables both the slider and its stepper buttons when all three Auto Play settings are off.
 Checkbox changes and opening the controls refresh the saved value and enabled
 state, with programmatic refreshes excluded from saving.
 
-**Speech Rate** follows the delay control and reuses
+**Speech Rate** follows the Auto Close section and reuses
 `MinimalSliderWithSteppersTemplate`, with 20 steps across -10 to +10. The local
 Forever export's `Blizzard_ChatFrame/Shared/TextToSpeechCommands.lua` defines
 `TEXTTOSPEECH_RATE_MIN = -10` and `TEXTTOSPEECH_RATE_MAX = 10`;
@@ -1140,13 +1223,13 @@ fallback, and shared narration lifecycle.
 Replacing the automatic event, closing QuestFrame, changing the quest/page/text,
 disabling automatic narration, or starting manual QuestFrame narration cancels
 and clears the pending timer. Existing frame lifecycle hooks check context;
-a post-hook on `Database:SetAutoNarrateQuests()` handles disabling the setting.
+a post-hook on `Database:SetAutoPlay()` handles disabling the matching source.
 Post-hooks on `Narration:Speak()` and `Narration:Stop()` cancel the scheduled timer
 when a shared presentation request is accepted or manually cancelled, before TTS
 submission exists. The `TTS:StartSession()` hook remains necessary for direct TTS
-calls. Disabling automatic narration cancels only activation still waiting for
-its configurable delay; a captured/accepted snapshot remains owned until replaced,
-stopped or completed, including while the previous presentation is closing.
+calls. Disabling Quest Auto Play cancels its activation timer and any accepted
+automatic request still awaiting submission. Manual requests and submitted speech
+remain owned until replaced, stopped or completed.
 Cancelled callbacks cannot revive an old quest request. The quest path adds no
 event frames, polling, or show/hide narration triggers; the timer only schedules the
 automatic path, without changing TTS generation or streaming.
@@ -1278,8 +1361,8 @@ uses `Unknown`; an unusable player/narrator voice stops the request.
 `Narration:Speak()` receives the original text and captured title, so later gossip
 pages cannot change an active display. The TTS controller handles sentence
 streaming, rate, sanitization, XML escaping, ownership and replacement.
-Closing GossipFrame hides its button, cancels its automatic activation and stops
-its owned narration. Greeting/options refreshes within the visible whole frame
+Closing GossipFrame hides its button and cancels its automatic activation. It
+stops owned narration only when Gossip Auto Close is enabled. Greeting/options refreshes within the visible whole frame
 do not count as closure. Subsequent reads recapture identity/text
 and clear the shared inspection model before loading. Starting gossip speech
 cancels a pending automatic quest request when the shared narration request is
@@ -1287,8 +1370,8 @@ accepted, before its opening completes. Updating visible gossip does not cancel
 accepted snapshots. Auto Play can replace them through the normal narration path
 when the next readable gossip text is activated.
 
-Gossip Auto Play reuses `Database:GetAutoNarrateQuests()` and
-`GetAutoNarrationDelay()` without new settings or client-specific logic.
+Gossip Auto Play uses `Database:GetAutoPlay("gossip")` and the shared
+`GetAutoNarrationDelay()` without client-specific logic.
 `Refresh()` retains the last observed text and NPC name before invoking
 `Narration:ScheduleAutoNarration()`. Repeated UI refreshes with unchanged data
 neither restart a pending delay nor replay text after activation or cancellation.
@@ -1307,7 +1390,7 @@ and `Narration:Speak()` once. The snapshot used during the delay is a predicate,
 not the accepted text/voice request.
 
 Post-hooks on `Narration:Speak/Stop`, `TTS:Stop/StartSession`, and disabling the
-existing automatic narration setting cancel pending Gossip Auto Play. The
+Gossip Auto Play setting cancel pending Gossip Auto Play. The
 observed dialogue is retained so repeated refreshes cannot undo STOP, another
 source's interruption, or a manual click. `TTS:Stop("finished")` is excluded:
 normal completion of the previous response must not cancel the next response's

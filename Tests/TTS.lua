@@ -21,9 +21,7 @@ local function Harness(withoutDiagnostics)
     environment.C_Timer = { After = function() error("Speech must not use timers") end }
     environment.VoiceSelection = nil
     environment.Enum = { TtsBoolSetting = { PlaySoundSeparatingChatLineBreaks = 0 } }
-    environment.C_TTSSettings = { SetSetting = function(setting, value)
-        Equal(setting, 0, "Only the separator setting is changed")
-        Equal(value, false, "Disable separator sound")
+    environment.C_TTSSettings = { SetSetting = function()
         test.settings = test.settings + 1
     end }
     environment.CreateFrame = function()
@@ -513,14 +511,14 @@ Test("UI shutdown stops active narration through both speech entry points and le
     end
 end)
 
-Test("Event frame and separator initialization occur once", function()
+Test("Event frame initializes once without changing global TTS settings", function()
     local test = Harness()
     test.tts:SpeakStreaming(text, 7)
     test.tts:Speak(text, 7)
     test.tts:Stop()
     test.tts:SpeakStreaming(text, 7)
     Equal(test.frames, 1)
-    Equal(test.settings, 1)
+    Equal(test.settings, 0)
     for _, event in ipairs({ "STARTED", "BOOKMARK", "FINISHED", "FAILED" }) do
         Equal(test.frame.events["VOICE_CHAT_TTS_PLAYBACK_" .. event], true)
     end
@@ -878,7 +876,7 @@ Test("Speech rate validates integers and preserves existing SavedVariables", fun
     local saved = test.environment.OutLoudDB
     local voices = saved.voices
     test.db:SetVoice("HUMAN", 2, 7)
-    test.db:SetAutoNarrateQuests(true)
+    test.db:SetAutoPlay("quest", true)
     test.db:SetAutoNarrationDelay(3.5)
     test.db:SetSingleVoice(8)
     Equal(test.db:GetSpeechRate(), 0)
@@ -907,7 +905,7 @@ Test("Speech rate validates integers and preserves existing SavedVariables", fun
     Equal(saved.voices, voices)
     Equal(test.db:GetVoice("HUMAN", 2), 7)
     Equal(test.db:GetSingleVoice(), 8)
-    Equal(test.db:GetAutoNarrateQuests(), true)
+    Equal(test.db:GetAutoPlay("quest"), true)
     Equal(test.db:GetAutoNarrationDelay(), 3.5)
 end)
 

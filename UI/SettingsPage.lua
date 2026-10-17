@@ -3,8 +3,7 @@ local AddonName, OutLoud = ...
 local SettingsPage = {}
 OutLoud.UI.SettingsPage = SettingsPage
 
-local AUTO_NARRATION_LABEL = "Automatically read quest, gossip and item text"
-local AUTO_NARRATION_DESCRIPTION = "Automatically starts narration when opening quest details, quest progress, quest reward pages, readable NPC gossip, or readable items. Gossip text changes start a new reading; readable items continue page by page. Quest Log narration remains manual."
+local AUTO_NARRATION_DESCRIPTION = "Automatically starts narration for the selected sources when their text is ready. Quest includes details, progress and reward pages. Gossip text changes start a new reading; readable items continue page by page. Quest Log narration remains manual."
 local AUTO_DELAY_DESCRIPTION = "Waits before automatically starting quest, gossip or readable-item narration, allowing existing dialogue to finish first. This delay does not affect manual narration or continuation between item pages."
 
 local VOICES_LAYOUT = {
@@ -130,12 +129,18 @@ function SettingsPage:UpdateScrollLayout()
     if self.AutoNarrationDelayDescription then
         self.AutoNarrationDelayDescription:SetWidth(descriptionWidth)
     end
+    if self.AutoCloseDescription then
+        self.AutoCloseDescription:SetWidth(descriptionWidth)
+    end
     if self.SpeechRateDescription then
         self.SpeechRateDescription:SetWidth(descriptionWidth)
     end
+    if self.TTSSeparatorSoundDescription then
+        self.TTSSeparatorSoundDescription:SetWidth(descriptionWidth)
+    end
 
-    local lastDescription = self.SpeechRateDescription or self.AutoNarrationDelayDescription
-        or self.AutoNarrateDescription
+    local lastDescription = self.TTSSeparatorSoundDescription or self.SpeechRateDescription
+        or self.AutoNarrationDelayDescription or self.AutoNarrateDescription
     local top, bottom = content:GetTop(), lastDescription:GetBottom()
     if top and bottom then
         content:SetHeight(math.max(1, top - bottom + 24))
@@ -534,7 +539,7 @@ end
 function SettingsPage:RefreshAutoNarrationDelay()
     local control = self.AutoNarrationDelaySlider
     if not control then return end
-    local enabled = OutLoud.Database:GetAutoNarrateQuests()
+    local enabled = OutLoud.Database:HasAutoPlay()
     self.SyncingAutoNarrationDelay = true
     control:SetValue(OutLoud.Database:GetAutoNarrationDelay())
     self.SyncingAutoNarrationDelay = false
@@ -601,6 +606,88 @@ function SettingsPage:CreateSpeechRateControl(anchor)
     self:RefreshSpeechRate()
 end
 
+-- Native checkbox used by the shared modern Settings page.
+---@class OutLoudSettingsCheckbox : CheckButton
+---@field Init fun(self: OutLoudSettingsCheckbox, value: boolean, initTooltip?: function)
+---@field SetValue fun(self: OutLoudSettingsCheckbox, value: boolean)
+---@field RegisterCallback fun(self: OutLoudSettingsCheckbox, event: string, callback: function, owner: table)
+---@field HoverBackground Texture
+function SettingsPage:CreateCheckbox(anchor, labelText, getValue, setValue)
+    local button = CreateFrame("CheckButton", nil, self.Content, "SettingsCheckboxTemplate")
+    ---@cast button OutLoudSettingsCheckbox
+    button:SetSize(self.SingleVoiceButton:GetWidth(), self.SingleVoiceButton:GetHeight())
+    button:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", -21, -18)
+    for _, texture in ipairs({
+        button:GetNormalTexture(), button:GetPushedTexture(),
+        button:GetCheckedTexture(), button:GetDisabledCheckedTexture(),
+    }) do
+        texture:ClearAllPoints()
+        texture:SetAllPoints(button)
+    end
+    button:Init(getValue(), nil)
+    button:SetScript("OnEnter", nil)
+    button:SetScript("OnLeave", nil)
+    button.HoverBackground:ClearAllPoints()
+    button.HoverBackground:SetAllPoints(button)
+    button.HoverBackground:SetAlpha(0)
+    button.HoverBackground:Hide()
+    button:RegisterCallback(SettingsCheckboxMixin.Event.OnValueChanged, function(_, value)
+        setValue(value)
+    end, self)
+    button:SetScript("OnShow", function() button:SetValue(getValue()) end)
+    local label = button:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    label:SetPoint("LEFT", button, "RIGHT", 5, 0)
+    label:SetText(labelText)
+    button:SetHitRectInsets(0, -(5 + label:GetStringWidth()), 0, 0)
+    return button
+end
+
+function SettingsPage:CreateSourceCheckboxes(header, getter, setter, descriptionText)
+    local controls, previous = {}, header
+    for _, source in ipairs({
+        { key = "quest", label = "Quest" }, { key = "gossip", label = "Gossip" },
+        { key = "itemText", label = "Item Text" },
+    }) do
+        local key = source.key
+        local button = self:CreateCheckbox(previous, source.label,
+            function() return OutLoud.Database[getter](OutLoud.Database, key) end,
+            function(value)
+                OutLoud.Database[setter](OutLoud.Database, key, value)
+                if setter == "SetAutoPlay" then self:RefreshAutoNarrationDelay() end
+            end)
+        button:ClearAllPoints()
+        button:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", previous == header and 10 or 0,
+            previous == header and -18 or -8)
+        controls[key], previous = button, button
+    end
+    local description = self.Content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    description:SetPoint("TOPLEFT", previous, "BOTTOMLEFT", 21, -5)
+    description:SetWidth(620)
+    description:SetJustifyH("LEFT")
+    description:SetJustifyV("TOP")
+    description:SetWordWrap(true)
+    description:SetText(descriptionText)
+    return controls, description
+end
+
+function SettingsPage:CreateTTSSeparatorSoundControl(anchor)
+    local setting = Enum.TtsBoolSetting.PlaySoundSeparatingChatLineBreaks
+    local button = self:CreateCheckbox(anchor, "TTS Separator Sound",
+        function() return C_TTSSettings.GetSetting(setting) end,
+        -- WoW owns this global setting; only a user toggle writes it.
+        function(value) C_TTSSettings.SetSetting(setting, value) end)
+    local description = self.Content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    description:SetPoint("TOPLEFT", button, "BOTTOMLEFT", 21, -5)
+    description:SetWidth(620)
+    description:SetJustifyH("LEFT")
+    description:SetJustifyV("TOP")
+    description:SetWordWrap(true)
+    description:SetText("If you hear a short notification sound after each spoken line, disable this option to turn it off. This affects WoW's global TTS behavior.")
+
+    self.TTSSeparatorSoundCheckbox = button
+    self.TTSSeparatorSoundDescription = description
+end
+
 function SettingsPage:CreateReadingSection(anchor)
     local header = CreateFrame(
         "Frame",
@@ -612,60 +699,15 @@ function SettingsPage:CreateReadingSection(anchor)
     self.ReadingHeader = header
     self:AnchorReadingSection(anchor)
 
-    header.Title:SetText("Narration")
+    header.Title:SetText("Auto Play")
 
-    -- Native checkbox used by Forever's modern Settings controls.
-    ---@class OutLoudSettingsCheckbox : CheckButton
-    ---@field Init fun(self: OutLoudSettingsCheckbox, value: boolean, initTooltip?: function)
-    ---@field SetValue fun(self: OutLoudSettingsCheckbox, value: boolean)
-    ---@field RegisterCallback fun(self: OutLoudSettingsCheckbox, event: string, callback: function, owner: table)
-    ---@field HoverBackground Texture
-    local autoButton = CreateFrame("CheckButton", nil, self.Content, "SettingsCheckboxTemplate")
-    ---@cast autoButton OutLoudSettingsCheckbox
-    autoButton:SetSize(self.SingleVoiceButton:GetWidth(), self.SingleVoiceButton:GetHeight())
-    autoButton:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 10, -18)
-    -- Keep the modern artwork within the same bounds as the radio controls.
-    for _, texture in ipairs({
-        autoButton:GetNormalTexture(), autoButton:GetPushedTexture(),
-        autoButton:GetCheckedTexture(), autoButton:GetDisabledCheckedTexture(),
-    }) do
-        texture:ClearAllPoints()
-        texture:SetAllPoints(autoButton)
-    end
-    autoButton:Init(OutLoud.Database:GetAutoNarrateQuests(), nil)
-    autoButton:SetScript("OnEnter", nil)
-    autoButton:SetScript("OnLeave", nil)
-    -- The native hover region anchors to the settings row's parent by default.
-    autoButton.HoverBackground:ClearAllPoints()
-    autoButton.HoverBackground:SetAllPoints(autoButton)
-    autoButton.HoverBackground:SetAlpha(0)
-    autoButton.HoverBackground:Hide()
-    autoButton:RegisterCallback(SettingsCheckboxMixin.Event.OnValueChanged, function(_, value)
-        OutLoud.Database:SetAutoNarrateQuests(value)
-        self:RefreshAutoNarrationDelay()
-    end, self)
-    autoButton:SetScript("OnShow", function()
-        autoButton:SetValue(OutLoud.Database:GetAutoNarrateQuests())
-        self:RefreshAutoNarrationDelay()
-    end)
-
-    local autoLabel = autoButton:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-    autoLabel:SetPoint("LEFT", autoButton, "RIGHT", 5, 0)
-    autoLabel:SetText(AUTO_NARRATION_LABEL)
-    -- Include only the label in the click area, leaving the description inactive.
-    autoButton:SetHitRectInsets(0, -(5 + autoLabel:GetStringWidth()), 0, 0)
-
-    local autoDescription = self.Content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-    autoDescription:SetPoint("TOPLEFT", autoButton, "BOTTOMLEFT", 21, -5)
-    autoDescription:SetWidth(620)
-    autoDescription:SetJustifyH("LEFT")
-    autoDescription:SetJustifyV("TOP")
-    autoDescription:SetWordWrap(true)
-    autoDescription:SetText(AUTO_NARRATION_DESCRIPTION)
+    self.AutoPlayCheckboxes, self.AutoNarrateDescription = self:CreateSourceCheckboxes(
+        header, "GetAutoPlay", "SetAutoPlay", AUTO_NARRATION_DESCRIPTION)
+    local autoDescription = self.AutoNarrateDescription
 
     local delayLabel = self.Content:CreateFontString(nil, "ARTWORK", "GameFontNormal")
     delayLabel:SetPoint("TOPLEFT", autoDescription, "BOTTOMLEFT", -21, -18)
-    delayLabel:SetText("Automatic narration delay")
+    delayLabel:SetText("Auto Play Delay")
 
     -- The same native slider/stepper implementation used by Forever Settings.
     ---@class OutLoudSettingsDelaySlider : Frame
@@ -687,7 +729,7 @@ function SettingsPage:CreateReadingSection(anchor)
             end,
         })
     delayControl:RegisterCallback(delayControl.Event.OnValueChanged, function(_, value)
-        if not self.SyncingAutoNarrationDelay and OutLoud.Database:GetAutoNarrateQuests() then
+        if not self.SyncingAutoNarrationDelay and OutLoud.Database:HasAutoPlay() then
             OutLoud.Database:SetAutoNarrationDelay(value)
         end
     end, self)
@@ -703,11 +745,18 @@ function SettingsPage:CreateReadingSection(anchor)
     delayDescription:SetWordWrap(true)
     delayDescription:SetText(AUTO_DELAY_DESCRIPTION)
 
-    self.AutoNarrateQuestsCheckbox = autoButton
-    self.AutoNarrateDescription = autoDescription
     self.AutoNarrationDelaySlider = delayControl
     self.AutoNarrationDelayLabel = delayLabel
     self.AutoNarrationDelayDescription = delayDescription
     self:RefreshAutoNarrationDelay()
-    self:CreateSpeechRateControl(delayDescription)
+    local closeHeader = CreateFrame("Frame", nil, self.Content, "SettingsListSectionHeaderTemplate")
+    closeHeader:SetPoint("TOPLEFT", delayDescription, "BOTTOMLEFT", -31, -24)
+    closeHeader:SetPoint("TOPRIGHT", delayDescription, "BOTTOMRIGHT", 0, -24)
+    closeHeader.Title:SetText("Auto Close")
+    self.AutoCloseHeader = closeHeader
+    self.AutoCloseCheckboxes, self.AutoCloseDescription = self:CreateSourceCheckboxes(
+        closeHeader, "GetAutoClose", "SetAutoClose",
+        "Stops narration and closes Talking Head when the selected source window closes. When disabled, captured narration continues; closed items never turn pages. Quest Log keeps its existing close behavior.")
+    self:CreateSpeechRateControl(self.AutoCloseDescription)
+    self:CreateTTSSeparatorSoundControl(self.SpeechRateDescription)
 end

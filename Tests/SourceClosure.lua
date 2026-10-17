@@ -40,12 +40,13 @@ local function Harness(client, auto)
         CreateFrame = function() error("Source closure checks must not construct frames") end,
     }, { __index = _G })
     environment._G = environment
+    environment.OutLoudDB = { autoNarrateQuests = auto }
+    environment.OutLoudRetailDB = { autoNarrateQuests = auto }
     local head = { State = "Closed", Frame = { IsShown = function() return true end } }
     local addon = { UI = { TalkingHead = head }, TTS = {}, Database = {}, VoiceSelection = {},
         NPCInspection = { LoadUnit = function() return {} end }, Debug = function() end }
     function addon:Error(...) error(table.concat({ ... }, " ")) end
-    function addon.Database:GetAutoNarrateQuests() return auto end
-    function addon.Database:GetAutoNarrationDelay() return 2 end
+    addon.VoiceSelection.AssignmentModes = { SINGLE = "single", RACE_GENDER = "raceGender" }
     function addon.VoiceSelection:IsSingleVoiceMode() return false end
     function addon.VoiceSelection:Resolve() return 7, {} end
     function addon.VoiceSelection:ResolvePlayer() return 7, {} end
@@ -60,13 +61,15 @@ local function Harness(client, auto)
         return true
     end
     function head:Hide(...) test.hides[#test.hides + 1] = { ... } end
-    for _, path in ipairs({ "Clients/" .. client .. "/Config.lua", "Core/Narration.lua",
+    function head:FinishTextPlayback() end
+    for _, path in ipairs({ "Clients/" .. client .. "/Config.lua", "Core/Database.lua", "Core/Narration.lua",
         "UI/QuestIntegration.lua", "UI/GossipIntegration.lua", "UI/ItemTextIntegration.lua",
         "UI/QuestLogIntegration.lua" }) do
         local chunk = assert(loadfile(path))
         setfenv(chunk, environment)
         chunk("OutLoud", addon)
     end
+    addon.Database:Initialize()
     local function Visibility(key)
         return { IsShown = function() return test.shown[key] end,
             IsVisible = function() return test.shown[key] end }
@@ -90,6 +93,14 @@ local function Harness(client, auto)
     log.BackButton = { IsVisible = function() return test.details end }
     test.sources = { Quest = quest, Gossip = gossip, Item = item, Log = log }
     test.addon, test.narration, test.head = addon, addon.Narration, head
+    function test:SetAutoPlay(key, value)
+        local source = self.sources[key].SettingsSource
+        addon.Database:SetAutoPlay(source, value)
+        -- Supply the post-hook notification; native hooks are inspected statically.
+        for _, owner in pairs(self.sources) do
+            if owner.OnAutoPlayChanged then owner:OnAutoPlayChanged(source) end
+        end
+    end
     function test:Start(key, pending)
         if key == "Item" then item:OnReady() end
         self.sources[key]:SpeakCurrentText()
@@ -325,6 +336,283 @@ Test("Item closure cancels its accepted request even after continuation was clea
     test.shown.Item = false
     test.sources.Item:OnHidden()
     Equal(test.narration.Narration, nil)
+end)
+
+local function Schedule(test, key)
+    local owner = test.sources[key]
+    if key == "Quest" then owner:ScheduleAutoNarration("QUEST_DETAIL")
+    elseif key == "Gossip" then owner:Refresh()
+    else owner:OnReady() end
+end
+
+Test("Each Auto Play switch independently gates activation and preserves manual playback", function(client)
+    for _, enabledKey in ipairs({ "Quest", "Gossip", "Item" }) do
+        local test = Harness(client, false)
+        test:SetAutoPlay(enabledKey, true)
+        for _, key in ipairs({ "Quest", "Gossip", "Item" }) do
+            Schedule(test, key)
+            Equal(test.sources[key].PendingAutoNarration ~= nil, key == enabledKey)
+        end
+        test.timers[1].callback()
+        Equal(test.narration.Narration.owner, test.sources[enabledKey])
+        for _, key in ipairs({ "Quest", "Gossip", "Item" }) do
+            test:SetAutoPlay(key, false)
+            local request = test:Start(key, true)
+            Equal(request.owner, test.sources[key], "Manual playback bypasses source Auto Play")
+        end
+    end
+end)
+
+Test("Disabling one source cancels only its delay and rejects stale callbacks", function(client)
+    for _, disabled in ipairs({ "Quest", "Gossip", "Item" }) do
+        local test, pending = Harness(client, true), {}
+        for _, key in ipairs({ "Quest", "Gossip", "Item" }) do
+            Schedule(test, key)
+            pending[key] = test.sources[key].PendingAutoNarration
+        end
+        test:SetAutoPlay(disabled, false)
+        for key, request in pairs(pending) do
+            if key == disabled then
+                Equal(test.sources[key].PendingAutoNarration, nil)
+                -- Keep the supplied callback after production clears request.timer.
+            else
+                Equal(test.sources[key].PendingAutoNarration, request)
+                Equal(request.timer.cancelled, nil)
+            end
+        end
+        local index = disabled == "Quest" and 1 or disabled == "Gossip" and 2 or 3
+        Equal(test.timers[index].cancelled, true)
+        test.timers[index].callback()
+        Equal(test.narration.Narration, nil)
+    end
+end)
+
+Test("Auto Close is independent for each source and retains captured requests when disabled", function(client)
+    for _, key in ipairs({ "Quest", "Gossip", "Item" }) do
+        for _, enabled in ipairs({ false, true }) do
+            for _, pending in ipairs({ false, true }) do
+                local test = Harness(client, false)
+                test.addon.Database:SetAutoClose(test.sources[key].SettingsSource, enabled)
+                local request = test:Start(key, pending)
+                local hides, stops = #test.hides, #test.stops
+                test.shown[key] = false
+                test.sources[key]:OnHidden()
+                if enabled then
+                    Equal(test.narration.Narration, nil)
+                    Equal(request.ended, true)
+                else
+                    Equal(test.narration.Narration, request)
+                    Equal(request.ended, nil)
+                    Equal(#test.hides, hides)
+                    Equal(#test.stops, stops)
+                    if pending then
+                        test.head.State = "Closed"
+                        test.narration:OnClosed()
+                        Equal(test.presentations[#test.presentations][2], request.text)
+                    end
+                    if key == "Item" then
+                        Equal(test.sources.Item.Reading, nil, "Closed books relinquish continuation only")
+                    end
+                    test.narration:Stop(nil, "Talking Head close")
+                    Equal(test.narration.Narration, nil, "Explicit closure/STOP stays unconditional")
+                end
+            end
+        end
+    end
+end)
+
+Test("Closing with Auto Close off still cancels unaccepted automatic activation", function(client)
+    for _, key in ipairs({ "Quest", "Gossip", "Item" }) do
+        local test = Harness(client, true)
+        test.addon.Database:SetAutoClose(test.sources[key].SettingsSource, false)
+        Schedule(test, key)
+        local timer = test.timers[1]
+        test.shown[key] = false
+        test.sources[key]:OnHidden()
+        Equal(timer.cancelled, true)
+        timer.callback()
+        Equal(test.narration.Narration, nil)
+        Equal(#test.hides, 0)
+    end
+end)
+
+Test("Temporary item hides preserve manual and automatic deferred page readiness", function(client)
+    for _, manual in ipairs({ false, true }) do
+        local test = Harness(client, false)
+        local item = test.sources.Item
+        test:Start("Item")
+        if manual then item:OnManualNavigation(1)
+        else item:OnPageEnded(item.Reading, item.Reading.current, "finished") end
+        local reading = item.Reading
+        test.shown.Item = false
+        item:OnHidden()
+        Equal(item.Reading, reading)
+        item:OnEvent("ITEM_TEXT_READY") -- not ready while still hidden
+        Equal(item.Reading, reading)
+        test.shown.Item, test.page, test.text = true, 2, "Second page."
+        item:OnEvent("ITEM_TEXT_READY")
+        Equal(item.Reading, reading)
+        Equal(item.Reading.current.page.number, 2)
+        item:OnEvent("ITEM_TEXT_CLOSED") -- stale closure after page readiness
+        Equal(item.Reading, reading)
+    end
+end)
+
+Test("Confirmed item closure clears deferred loading with either Auto Close setting", function(client)
+    for _, enabled in ipairs({ false, true }) do
+        local test = Harness(client, false)
+        local item = test.sources.Item
+        test.addon.Database:SetAutoClose("itemText", enabled)
+        test:Start("Item")
+        local ended = test.speaks[1][3]
+        item:OnManualNavigation(1)
+        test.shown.Item = false
+        item:OnHidden()
+        item:OnEvent("ITEM_TEXT_CLOSED")
+        Equal(item.Reading, nil)
+        Equal(item.Item, nil)
+        test.page, test.text = 2, "Second page."
+        item:OnReady()
+        ended("finished")
+        Equal(test.turns, 0)
+        Equal(item.Reading, nil)
+        Equal(item.PendingAutoNarration, nil)
+    end
+end)
+
+Test("Disabling item activation cancels pending navigation but preserves ongoing readings", function(client)
+    local test = Harness(client, false)
+    local item = test.sources.Item
+    item:OnReady()
+    test:SetAutoPlay("Item", true)
+    item:OnManualNavigation(1)
+    test.page = 2
+    item:OnManualNavigation(1)
+    test:SetAutoPlay("Item", false)
+    Equal(item.Reading.silent, true, "Cancel activation while preserving page navigation readiness")
+    test.page, test.text = 3, "Third page."
+    item:OnReady()
+    Equal(test.narration.Narration, nil)
+    test:Start("Item")
+    item:OnManualNavigation(-1)
+    local reading = item.Reading
+    test:SetAutoPlay("Item", false)
+    Equal(item.Reading, reading)
+    test.page, test.text = 2, "Second page."
+    item:OnReady()
+    Equal(item.Reading.current.page.number, 2)
+end)
+
+Test("Silent item navigation never becomes source closure or automatic playback", function(client)
+    local test = Harness(client, false)
+    local item = test.sources.Item
+    item:OnReady()
+    local identity = item.Item
+    item:OnManualNavigation(1)
+    test.shown.Item = false
+    item:OnHidden()
+    Equal(item.Item, identity)
+    Equal(item.Reading.silent, true)
+    test.shown.Item, test.page, test.text = true, 2, "Second page."
+    item:OnReady()
+    Equal(item.Item, identity)
+    Equal(item.Reading, nil)
+    Equal(test.narration.Narration, nil)
+    Equal(item.ReadyPage.number, 2)
+end)
+
+Test("Disabling Auto Play cancels only unsubmitted automatic requests from that source", function(client)
+    for _, key in ipairs({ "Quest", "Gossip", "Item" }) do
+        for _, submitted in ipairs({ false, true }) do
+            local test = Harness(client, true)
+            test.head.State = "Closing"
+            Schedule(test, key)
+            test.timers[1].callback()
+            local request = test.narration.Narration
+            Equal(request.automatic, true)
+            if submitted then
+                test.head.State, test.head.Transition = "Opening", {}
+                test.narration:Submit(request, test.head.Transition)
+            end
+            test:SetAutoPlay(key, false)
+            if submitted then
+                Equal(test.narration.Narration, request, "Disabling activation leaves current speech alone")
+            else
+                Equal(test.narration.Narration, nil)
+                test.head.State = "Closed"
+                test.narration:OnClosed()
+                Equal(#test.presentations, 0, "A cancelled automatic request cannot open later")
+            end
+            test:SetAutoPlay(key, true)
+            request = test:Start(key, true)
+            Equal(request.automatic, false)
+            test:SetAutoPlay(key, false)
+            Equal(test.narration.Narration, request, "Manual requests survive the source setting change")
+            local incoming = test:Start("Log", true)
+            test:SetAutoPlay(key, false)
+            Equal(test.narration.Narration, incoming, "Settings cannot cancel a newer source")
+        end
+    end
+end)
+
+Test("Detached item completion and closure cannot affect a newer narration source", function(client)
+    local test = Harness(client, false)
+    test.addon.Database:SetAutoClose("itemText", false)
+    test:Start("Item")
+    local ended = test.speaks[1][3]
+    test.shown.Item = false
+    test.sources.Item:OnHidden()
+    local incoming = test:Start("Gossip")
+    local hides = #test.hides
+    ended("finished")
+    test.sources.Item:OnEvent("ITEM_TEXT_CLOSED")
+    Equal(test.narration.Narration, incoming)
+    Equal(test.turns, 0)
+    Equal(#test.hides, hides)
+end)
+
+Test("Closed items can finish captured pending speech without advancing pages", function(client)
+    for _, pending in ipairs({ false, true }) do
+        local test = Harness(client, false)
+        local item = test.sources.Item
+        test.addon.Database:SetAutoClose("itemText", false)
+        if pending then test.head.State = "Closing" end
+        local request = test:Start("Item", pending)
+        test.shown.Item = false
+        item:OnEvent("ITEM_TEXT_CLOSED")
+        Equal(test.narration.Narration, request)
+        Equal(item.Reading, nil)
+        if pending then
+            test.head.State, test.head.Transition = "Opening", {}
+            test.narration:Submit(request, test.head.Transition)
+        end
+        test.speaks[1][3]("finished")
+        Equal(test.narration.Narration, nil)
+        Equal(test.turns, 0)
+        item:OnEvent("ITEM_TEXT_READY")
+        Equal(item.Reading, nil)
+        Equal(item.ReadyPage, nil)
+    end
+end)
+
+Test("Cancelling an accepted Auto Play request preserves another source's delay", function(client)
+    local test = Harness(client, true)
+    test.head.State = "Closing"
+    Schedule(test, "Quest")
+    test.timers[1].callback()
+    local request = test.narration.Narration
+    Schedule(test, "Gossip")
+    local pending, timer = test.sources.Gossip.PendingAutoNarration, test.timers[2]
+    local stops, hides = #test.stops, #test.hides
+    test:SetAutoPlay("Quest", false)
+    Equal(request.ended, true)
+    Equal(test.narration.Narration, nil)
+    Equal(test.sources.Gossip.PendingAutoNarration, pending)
+    Equal(timer.cancelled, nil)
+    Equal(#test.stops, stops)
+    Equal(#test.hides, hides)
+    timer.callback()
+    Equal(test.narration.Narration.owner, test.sources.Gossip)
 end)
 
 -- Static hook contracts: no UI construction or authoritative event ordering.

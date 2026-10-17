@@ -50,7 +50,7 @@ end
 -- Each integration retains its source-specific readiness/identity predicate.
 function Narration:ScheduleAutoNarration(owner, request, isCurrent, start)
     self:CancelAutoNarration(owner)
-    if not OutLoud.Database:GetAutoNarrateQuests() then return end
+    if not OutLoud.Database:GetAutoPlay(owner.SettingsSource) then return end
     local delay = OutLoud.Database:GetAutoNarrationDelay()
     if delay == 0 then
         if isCurrent(request) then start() end
@@ -61,7 +61,7 @@ function Narration:ScheduleAutoNarration(owner, request, isCurrent, start)
         if owner.PendingAutoNarration ~= request then return end
         request.timer = nil
         owner.PendingAutoNarration = nil
-        if OutLoud.Database:GetAutoNarrateQuests() and isCurrent(request) then start() end
+        if OutLoud.Database:GetAutoPlay(owner.SettingsSource) and isCurrent(request) then start() end
     end)
 end
 
@@ -114,6 +114,24 @@ function Narration:StopSource(owner, reason)
     end
 end
 
+function Narration:CloseSource(owner, reason)
+    if OutLoud.Database:GetAutoClose(owner.SettingsSource) then
+        self:StopSource(owner, reason)
+    else
+        self:CancelAutoNarration(owner)
+    end
+end
+
+function Narration:OnAutoPlayDisabled(owner)
+    self:CancelAutoNarration(owner)
+    local request = self.Narration
+    if request and request.owner == owner and request.automatic and not request.submitted then
+        -- No TTS was submitted; relinquish only this pending request. A global
+        -- STOP would also cancel other sources' activation timers via post-hooks.
+        CancelRequest(self, "auto-play-disabled")
+    end
+end
+
 function Narration:OnClosed()
     local talkingHead = OutLoud.UI.TalkingHead
     local request = self.Narration
@@ -156,7 +174,7 @@ end
 
 -- Capture once; navigation cannot change an accepted narration's content.
 -- Returns acceptance; a replacement may wait for the current presentation to close.
-function Narration:Speak(unit, text, voiceID, displayTitle, diagnosticSource, modelFileID, onRequestEnded, sourceOwner)
+function Narration:Speak(unit, text, voiceID, displayTitle, diagnosticSource, modelFileID, onRequestEnded, sourceOwner, automatic)
     self:Initialize()
     if not unit or not UnitExists(unit) then return false, "unit-unavailable" end
     local speaker = {
@@ -170,7 +188,7 @@ function Narration:Speak(unit, text, voiceID, displayTitle, diagnosticSource, mo
     local request = {
         id = self.RequestID, speaker = speaker, text = text, voiceID = voiceID,
         source = type(diagnosticSource) == "string" and diagnosticSource or "Narration",
-        onRequestEnded = onRequestEnded, owner = sourceOwner,
+        onRequestEnded = onRequestEnded, owner = sourceOwner, automatic = automatic == true,
     }
     -- Change ownership before native STOP can synchronously notify the outgoing session.
     local previous = self.Narration

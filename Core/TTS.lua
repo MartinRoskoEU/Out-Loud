@@ -329,11 +329,6 @@ function TTS:Initialize()
         self:OnEvent(event, ...)
     end)
 
-    C_TTSSettings.SetSetting(
-        Enum.TtsBoolSetting.PlaySoundSeparatingChatLineBreaks,
-        false
-    )
-
     self.Frame = frame
     self.SessionID = 0
     self.Initialized = true

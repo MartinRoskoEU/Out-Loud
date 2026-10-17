@@ -173,7 +173,7 @@ Test("Manual activation, cancellation and disabling cannot be undone by refresh"
             test.gossip:StartCurrentNarration()
             Equal(#test.calls, 1, "Manual button bypasses the delay")
         else
-            if action == "disabled" then test.addon.Database:SetAutoNarrateQuests(false) end
+            if action == "disabled" then test.addon.Database:SetAutoPlay("gossip", false) end
             -- Same production cancellation method used by STOP/other-source/settings post-hooks.
             test.gossip:OnTTSStop()
         end
@@ -259,13 +259,13 @@ local source = Read("UI/GossipIntegration.lua")
 for _, hook in ipairs({
     'hooksecurefunc(frame, "Update", Refresh)', 'frame:HookScript("OnShow", Refresh)',
     'frame:HookScript("OnHide", function() self:OnHidden() end)',
-    'hooksecurefunc(OutLoud.Database, "SetAutoNarrateQuests", function()',
+    'hooksecurefunc(OutLoud.Database, "SetAutoPlay", function(_, source)',
     'hooksecurefunc(OutLoud.Narration, "Speak", function() self:CancelPendingAutoNarration() end)',
     'hooksecurefunc(OutLoud.Narration, "Stop", function() self:CancelPendingAutoNarration() end)',
     'hooksecurefunc(OutLoud.TTS, "Stop", function(_, reason) self:OnTTSStop(reason) end)',
     'hooksecurefunc(OutLoud.TTS, "StartSession", function() self:CancelPendingAutoNarration() end)',
     'OutLoud.Narration:ScheduleAutoNarration(self, dialogue,',
-    'function() self:StartCurrentNarration() end)',
+    'function() self:StartCurrentNarration(true) end)',
 }) do assert(source:find(hook, 1, true), "Missing shared activation/cancellation hook: " .. hook) end
 local _, speaks = source:gsub("OutLoud%.Narration:Speak%(", "")
 Equal(speaks, 1, "One existing speech forwarding path")

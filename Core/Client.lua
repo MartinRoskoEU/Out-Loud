@@ -10,6 +10,7 @@ function Client:CheckCompatibility()
         { "C_VoiceChat.GetTtsVoices", C_VoiceChat and C_VoiceChat.GetTtsVoices },
         { "C_VoiceChat.SpeakText", C_VoiceChat and C_VoiceChat.SpeakText },
         { "C_VoiceChat.StopSpeakingText", C_VoiceChat and C_VoiceChat.StopSpeakingText },
+        { "C_TTSSettings.GetSetting", C_TTSSettings and C_TTSSettings.GetSetting },
         { "C_TTSSettings.SetSetting", C_TTSSettings and C_TTSSettings.SetSetting },
         { "C_Texture.GetAtlasExists", C_Texture and C_Texture.GetAtlasExists },
         { "Settings.RegisterCanvasLayoutCategory", Settings and Settings.RegisterCanvasLayoutCategory },

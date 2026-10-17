@@ -28,7 +28,8 @@ local function Harness(auto, delay)
     }, { __index = _G })
     local addon = { UI = {}, Database = {}, VoiceSelection = {}, Narration = {} }
     function addon:Error() test.errors = test.errors + 1 end
-    function addon.Database:GetAutoNarrateQuests() return test.auto end
+    function addon.Database:GetAutoPlay() return test.auto end
+    function addon.Database:GetAutoClose() return true end
     function addon.Database:GetAutoNarrationDelay() return test.delay end
     function addon.VoiceSelection:ResolvePlayer() return 7, {} end
     local narration = assert(LoadFile("Core/Narration.lua"))
@@ -107,7 +108,7 @@ Test("Cancelling or manually activating an item invalidates delayed Auto Play", 
             test.integration:OnTTSStop()
         elseif action == "close" then
             test.shown = false
-            test.integration:OnHidden()
+            test.integration:OnEvent("ITEM_TEXT_CLOSED")
         elseif action == "manual" then
             test.integration:SpeakCurrentText()
             Equal(#test.calls, 1, "Manual activation bypasses the delay")
@@ -286,7 +287,7 @@ Test("Stop or closing invalidates pending page turns and old completions", funct
         ended("finished")
         if close then
             test.shown = false
-            test.integration:OnHidden()
+            test.integration:OnEvent("ITEM_TEXT_CLOSED")
         else
             test.integration:CancelReading("stopped", false)
         end

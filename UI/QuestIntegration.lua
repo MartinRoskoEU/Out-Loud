@@ -1,6 +1,6 @@
 local AddonName, OutLoud = ...
 
-local QuestIntegration = {}
+local QuestIntegration = { SettingsSource = "quest" }
 OutLoud.UI.QuestIntegration = QuestIntegration
 
 -- Verified Forever events, also present in Retail source. Only this OnEvent path
@@ -112,13 +112,13 @@ end
 function QuestIntegration:OnHidden()
     -- Panel/stage changes are not closure of the containing quest dialogue.
     if self.Frame:IsShown() then return end
-    OutLoud.Narration:StopSource(self, "quest-closed")
+    OutLoud.Narration:CloseSource(self, "quest-closed")
     self:UpdateButtonVisibility()
 end
 
 function QuestIntegration:IsAutoNarrationCurrent(request)
     -- This guards activation before capture, never an accepted narration snapshot.
-    if not OutLoud.Database:GetAutoNarrateQuests() or GetQuestID() ~= request.questID then
+    if not OutLoud.Database:GetAutoPlay(self.SettingsSource) or GetQuestID() ~= request.questID then
         return false
     end
     local text, _, textSource = self:GetCurrentText()
@@ -127,24 +127,30 @@ end
 
 function QuestIntegration:ScheduleAutoNarration(event)
     self:CancelPendingAutoNarration()
-    if not OutLoud.Database:GetAutoNarrateQuests() then return end
+    if not OutLoud.Database:GetAutoPlay(self.SettingsSource) then return end
     local text, _, textSource = self:GetCurrentText()
     if not text or textSource ~= autoNarrationEvents[event] then return end
 
     local request = { questID = GetQuestID(), text = text, textSource = textSource }
     OutLoud.Narration:ScheduleAutoNarration(self, request,
         function(pending) return self:IsAutoNarrationCurrent(pending) end,
-        function() self:StartCurrentNarration() end)
+        function() self:StartCurrentNarration(true) end)
 end
 
-function QuestIntegration:StartCurrentNarration()
-    local ok, message = pcall(self.SpeakCurrentText, self)
+function QuestIntegration:StartCurrentNarration(automatic)
+    local ok, message = pcall(self.SpeakCurrentText, self, automatic)
     if not ok then
         OutLoud:Error("Read failed with Lua error:", tostring(message))
     end
 end
 
-function QuestIntegration:SpeakCurrentText()
+function QuestIntegration:OnAutoPlayChanged(source)
+    if source == self.SettingsSource and not OutLoud.Database:GetAutoPlay(source) then
+        OutLoud.Narration:OnAutoPlayDisabled(self)
+    end
+end
+
+function QuestIntegration:SpeakCurrentText(automatic)
     self:CancelPendingAutoNarration()
     OutLoud:Debug("Quest narration requested.")
     -- Re-read at narration start; the automatic timer's snapshot is only a guard.
@@ -199,7 +205,7 @@ function QuestIntegration:SpeakCurrentText()
     if singleVoice then
         speakerUnit = "player"
     end
-    return OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitle, "Quest", info.modelFileID, nil, self)
+    return OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitle, "Quest", info.modelFileID, nil, self, automatic)
 end
 
 function QuestIntegration:Initialize()
@@ -285,10 +291,8 @@ function QuestIntegration:Initialize()
         end
     end
 
-    hooksecurefunc(OutLoud.Database, "SetAutoNarrateQuests", function()
-        if not OutLoud.Database:GetAutoNarrateQuests() then
-            self:CancelPendingAutoNarration()
-        end
+    hooksecurefunc(OutLoud.Database, "SetAutoPlay", function(_, source)
+        self:OnAutoPlayChanged(source)
     end)
     -- Accepted presentation requests replace the delay before TTS submission exists.
     hooksecurefunc(OutLoud.Narration, "Speak", function()
