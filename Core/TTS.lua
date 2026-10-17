@@ -277,11 +277,27 @@ end
 function TTS:SplitSentences(text)
     local sentences = {}
     text = text:gsub("%s+", " ")
-    for sentence in text:gmatch("[^.!?]+[.!?]*") do
+    local position = 1
+    local bracketStart, bracketEnd = text:find("%b<>")
+    while true do
+        local first, last = text:find("[^.!?]+[.!?]*", position)
+        if not first then break end
+        -- A punctuation boundary inside a complete bracketed passage must include
+        -- the whole passage, not leave its closing bracket on the next sentence.
+        while bracketStart and bracketStart <= last do
+            if bracketEnd > last then
+                last = bracketEnd
+                local punctuationStart, punctuationEnd = text:find("[.!?]+", last + 1)
+                if punctuationStart == last + 1 then last = punctuationEnd end
+            end
+            bracketStart, bracketEnd = text:find("%b<>", bracketEnd + 1)
+        end
+        local sentence = text:sub(first, last)
         sentence = sentence:gsub("^%s+", ""):gsub("%s+$", "")
         if sentence ~= "" then
             sentences[#sentences + 1] = sentence
         end
+        position = last + 1
     end
     return sentences
 end

@@ -45,7 +45,7 @@ function ItemTextIntegration:CancelReading(reason, stopNarration)
     if not reading or not stopNarration then return end
     local request = OutLoud.Narration.Narration
     if request and reading.current and request.onRequestEnded == reading.current.onEnded then
-        OutLoud.Narration:Stop(reason, "Item Text")
+        OutLoud.Narration:StopSource(self, reason)
     end
 end
 
@@ -67,7 +67,7 @@ function ItemTextIntegration:StartPage(reading, page)
     local starting = self.StartingPage
     self.StartingPage = reading
     local called, ok, reason = pcall(OutLoud.Narration.Speak, OutLoud.Narration, "player", page.text, voiceID, page.title,
-        "Item Text", nil, current.onEnded)
+        "Item Text", nil, current.onEnded, self)
     self.StartingPage = starting
     if not called then
         if self.Reading == reading then self:CancelReading("lua-error", true) end
@@ -176,8 +176,10 @@ function ItemTextIntegration:OnEvent(event)
 end
 
 function ItemTextIntegration:OnHidden()
-    self:CancelReading("item-text-closed", true)
+    if self.Frame:IsShown() then return end
+    self:CancelReading("item-text-closed", false)
     self.Item, self.ReadyPage, self.HasReady, self.AutoPlayPending = nil, nil, nil, nil
+    OutLoud.Narration:StopSource(self, "item-text-closed")
     if self.Button then self.Button:Hide() end
 end
 

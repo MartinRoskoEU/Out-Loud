@@ -69,8 +69,10 @@ function GossipIntegration:Refresh()
 end
 
 function GossipIntegration:OnHidden()
-    self:CancelPendingAutoNarration()
+    -- Only the whole frame closes narration; greeting/options can change in place.
+    if self.Frame:IsShown() then return end
     self.AutoNarrationDialogue = nil
+    OutLoud.Narration:StopSource(self, "gossip-closed")
     self:UpdateButtonVisibility()
 end
 
@@ -127,7 +129,7 @@ function GossipIntegration:SpeakCurrentText()
         return
     end
 
-    return OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitle, "Gossip", info.modelFileID)
+    return OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitle, "Gossip", info.modelFileID, nil, self)
 end
 
 function GossipIntegration:Initialize()

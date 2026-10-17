@@ -3,6 +3,12 @@ local AddonName, OutLoud = ...
 local QuestLogIntegration = {}
 OutLoud.UI.QuestLogIntegration = QuestLogIntegration
 
+function QuestLogIntegration:OnHidden()
+    -- Back closes the detail viewport; changing selection in an open view does not.
+    if self.Frame:IsVisible() and self.DetailsFrame:IsVisible() then return end
+    OutLoud.Narration:StopSource(self, "quest-log-closed")
+end
+
 function QuestLogIntegration:GetCurrentText()
     if not self.Frame or not self.Frame:IsVisible() then
         return nil, "quest-log-closed"
@@ -68,7 +74,7 @@ function QuestLogIntegration:SpeakCurrentText()
         return
     end
 
-    return OutLoud.Narration:Speak("player", description, voiceID, displayTitle, "Quest Log")
+    return OutLoud.Narration:Speak("player", description, voiceID, displayTitle, "Quest Log", nil, nil, self)
 end
 
 function QuestLogIntegration:Initialize()
@@ -116,6 +122,7 @@ function QuestLogIntegration:Initialize()
     self.Button = button
 
     local function Refresh()
+        self:OnHidden()
         self:UpdateButtonVisibility()
     end
     frame:HookScript("OnEvent", Refresh)

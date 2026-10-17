@@ -134,6 +134,76 @@ Test("Tested splitter preserves punctuation and normalizes whitespace", function
     end
 end)
 
+Test("Complete angle-bracketed passages keep closing punctuation and normal outside boundaries", function()
+    local test = Harness()
+    local action = "<Sarvis produces a piece of paper from within his robes.>"
+    for _, case in ipairs({
+        { action, { action } },
+        { "Before. " .. action .. " After!", { "Before.", action, "After!" } },
+        { "<He stops!> What?", { "<He stops!>", "What?" } },
+        { "<He wonders?> Next.", { "<He wonders?>", "Next." } },
+        { "<He stops...>?! Next.", { "<He stops...>?!", "Next." } },
+        { "<He stops. \n > Next.", { "<He stops. >", "Next." } },
+        { "<Wait!><Ready?> Go.", { "<Wait!>", "<Ready?>", "Go." } },
+        { "Use <gate> now. Next!", { "Use <gate> now.", "Next!" } },
+        { "<Unclosed. Next.", { "<Unclosed.", "Next." } },
+    }) do
+        local sentences = test.tts:SplitSentences(case[1])
+        Equal(#sentences, #case[2], case[1])
+        for index, expected in ipairs(case[2]) do Equal(sentences[index], expected) end
+    end
+end)
+
+Test("Multiple sentences inside a bracketed passage remain one logical unit", function()
+    local test = Harness()
+    for _, passage in ipairs({
+        "<He looks around. Then draws his sword.>",
+        "<He looks around! Then asks why? Finally draws his sword.>",
+        "<He looks around. Then draws his sword>",
+        "<He gestures <toward the door.> Then draws his sword!>",
+    }) do
+        local sentences = test.tts:SplitSentences("Before? " .. passage .. " After. Another!")
+        Equal(#sentences, 4)
+        Equal(sentences[1], "Before?")
+        Equal(sentences[2], passage)
+        Equal(sentences[3], "After.")
+        Equal(sentences[4], "Another!")
+    end
+end)
+
+Test("Long bracketed passages stay lossless and use the same display and speech indexes", function()
+    -- There is no numeric text-length cap in the existing splitter. Exercise both
+    -- long unbroken sentences and many enclosed sentences without inventing one.
+    for _, passage in ipairs({
+        "<" .. string.rep("Long passage ", 1200) .. "ends.>",
+        "<" .. string.rep("He looks around. Then draws his sword! ", 400) .. "Ready?>",
+        "<" .. string.rep("word", 4000) .. ".>",
+    }) do
+        local test = Harness()
+        local updates = {}
+        Equal(test.tts:Speak(passage .. " Following sentence. Last one!", 7, nil, nil,
+            function(displayed, chunk) updates[#updates + 1] = { displayed, chunk } end), true)
+        local session = test.tts.CurrentSession
+        Equal(#session.sentences, 3)
+        Equal(session.sentences[1], passage, "No truncation, added brackets or detached closing bracket")
+        Equal(session.sentences[2], "Following sentence.")
+        Equal(session.sentences[3], "Last one!")
+        for index = 1, 3 do
+            Equal(#test.calls, index, "Only the current and one prefetched segment are submitted")
+            Equal(test.calls[index].spoken, test.tts:SanitizeSpeechText(session.sentences[index]))
+            Equal(test.calls[index].mark, "OUTLOUD:SPEECH:1:" .. index)
+            test:Bookmark(index, 100 + index)
+            Equal(#test.calls, math.min(index + 1, 3))
+            Equal(updates[index][1], session.sentences[index])
+            Equal(updates[index][2], index)
+            test:Bookmark(index, 100 + index)
+            Equal(#updates, index, "Duplicate bookmarks cannot repeat a segment")
+        end
+        test:Event("FINISHED", 103)
+        Equal(test.tts.CurrentSession, nil)
+    end
+end)
+
 Test("Speak forwards narration callbacks and source to streaming", function()
     local test = Harness()
     local ended, started, progress = function() end, function() end, function() end
@@ -765,8 +835,10 @@ Test("XML control bytes are replaced without changing Unicode, escaping, or disp
 end)
 
 Test("Angle brackets sanitize speech while original sentences and ownership remain intact", function()
-    local original = "<One of the kobolds dropped this book. It looks like the kobold might have tried to eat it.>"
-    local spoken = "One of the kobolds dropped this book. It looks like the kobold might have tried to eat it."
+    local passage = "<One of the kobolds dropped this book. It looks like the kobold might have tried to eat it.>"
+    local enclosedSpeech = "One of the kobolds dropped this book. It looks like the kobold might have tried to eat it."
+    local original = passage .. " Next instruction."
+    local spoken = enclosedSpeech .. " Next instruction."
     local test = Harness()
     local updates = {}
     Equal(test.tts:SanitizeSpeechText(original), spoken, "Preserve all enclosed text")
@@ -778,16 +850,17 @@ Test("Angle brackets sanitize speech while original sentences and ownership rema
     test:Bookmark(1, 101)
     local sentences = test.tts:SplitSentences(original)
     Equal(#test.calls, 2, "Keep one-sentence-ahead submission")
-    Equal(test.calls[1].spoken, "One of the kobolds dropped this book.")
-    Equal(test.calls[2].spoken, "It looks like the kobold might have tried to eat it.")
+    Equal(test.calls[1].spoken, enclosedSpeech)
+    Equal(test.calls[2].spoken, "Next instruction.")
     test:Bookmark(2, 102)
     for index = 1, 2 do
         Equal(test.calls[index].mark, "OUTLOUD:SPEECH:1:" .. index)
         Equal(updates[index][1], sentences[index], "Display uses the original sentence")
         Equal(updates[index][2], index)
     end
-    Equal(session.sentences[3], ">", "Keep the original trailing display sentence")
-    Equal(session.queued[3], nil, "Existing empty-speech handling skips a bracket-only chunk")
+    Equal(session.sentences[1], passage, "The entire original bracketed passage is displayed together")
+    Equal(#session.sentences, 2, "No bracket-only display chunk")
+    Equal(session.queued[3], nil)
     Equal(#test.calls, 2)
     test:Event("FINISHED", 102)
     for _, call in ipairs(test.calls) do

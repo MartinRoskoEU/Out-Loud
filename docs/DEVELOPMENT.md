@@ -349,7 +349,9 @@ the development addon does not migrate earlier numeric race settings.
 Callers supply text and an already-resolved voice ID to the `OutLoud.TTS` singleton:
 
 - `SpeakStreaming(text, voiceID)` normalizes whitespace and uses the tested
-  `.`, `!`, `?` sentence splitter. The first sentence is submitted immediately;
+  `.`, `!`, `?` sentence splitter. Complete balanced `<...>` passages are kept
+  intact when punctuation inside them would otherwise end a segment, including
+  passages containing multiple sentences. The first segment is submitted immediately;
   each valid sentence ownership bookmark submits only the next sentence. Duplicate bookmarks
   cannot queue a sentence twice. No timers or artificial delays are used inside
   this controller path. Narration calls it immediately when Talking Head opening begins.
@@ -358,7 +360,7 @@ Callers supply text and an already-resolved voice ID to the `OutLoud.TTS` single
 - `Stop()` cancels active Out Loud speech. Calling it while idle leaves other
   TTS alone.
 
-`TTS:SanitizeSpeechText(text)` replaces `/`, `\`, `|`, `_`, and `~` with spaces,
+`TTS:SanitizeSpeechText(text)` replaces `/`, `\`, `|`, `_`, `~`, `<`, and `>` with spaces,
 also replaces forbidden XML ASCII controls (`0x00`-`0x08`, `0x0B`, `0x0C`,
 `0x0E`-`0x1F`) with spaces, collapses whitespace, and trims it. Tab, LF, and CR
 continue through whitespace normalization. Punctuation and UTF-8 bytes are
@@ -404,6 +406,13 @@ Speech payloads always retain the existing ownership-only format, including when
 the display callback is supplied.
 `TTS:SplitSentences(text)` exposes the same splitter used by streaming, so Talking
 Head can prepare exactly the first sentence before its entrance animation.
+The display keeps the original brackets; sanitization still runs only on each
+completed segment's speech copy. Closing `>` therefore stays with its passage,
+not a bracket-only or unrelated following segment. Inline spans without sentence
+punctuation retain the surrounding sentence; unmatched brackets use ordinary
+punctuation splitting. No numeric segment-length cap exists in the current
+splitter: long passages remain lossless and use the existing scrollable display.
+Standalone long-text checks do not establish native TTS size limits or playback.
 
 Word-level `OUTLOUD:PROGRESS` bookmarks were removed after the user reported
 degraded speech quality. The controller adds only the original ownership bookmark
@@ -711,6 +720,11 @@ Standalone Lua 5.1 checks under `Tests/` include:
   protection, presentation ownership predicates and callback isolation using supplied
   coordinator state and call-recording doubles. It does not load Talking Head or
   simulate native frames, animations, timing, audio or events.
+- `Tests/SourceClosure.lua` checks source-owned closure, delayed Auto Play,
+  pending presentation cancellation, cross-source replacement, Gossip navigation,
+  Item Text page changes and manual STOP isolation under both client configs.
+  It exercises production controllers with supplied visibility/page predicates
+  and call recorders; hook wiring is static, with no native UI/events/audio.
 - `Tests/TTS.lua` checks splitting/sanitization, speech forwarding, controller predicates,
   session state, stale/duplicate supplied events, bounded metadata, callback guards,
   error handling and diagnostic isolation. Its API doubles record calls; they do
@@ -794,7 +808,9 @@ local accepted = OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitl
 
 The existing Talking Head singleton is under `OutLoud.UI.TalkingHead`, not a
 separate `OutLoud.TalkingHead`. `Narration:Speak(unit, text, voiceID, displayTitle,
-diagnosticSource, modelFileID)` captures speaker name/faction at acceptance.
+diagnosticSource, modelFileID, onRequestEnded, sourceOwner)` captures speaker
+name/faction at acceptance. The optional source owner is the integration singleton,
+independent of the diagnostic label and the request/presentation ownership token.
 Quest/Gossip pass the speaking UnitToken and already-resolved model FileDataID.
 The UnitToken drives the portrait; FileDataID remains voice-resolution metadata. `TalkingHead:Show(speaker, text, onOpening)`
 receives captured narration data and prepares its first normalized sentence. Omitting
@@ -824,9 +840,13 @@ bookmark, once per session, and checks the same presentation
 ownership token. The spinner stays on while speech is generating; submission
 return and unowned playback-start events do not clear it. TTS does not depend on
 the UI.
-Closing or changing the quest window updates button visibility and may cancel an
-automatic activation that has not yet captured a narration request. Accepted
-snapshots continue during navigation, closing, opening and speech. The Talking Head close button calls `Narration:Stop()` to
+Changing quest stages updates button visibility and may cancel an automatic
+activation that has not yet captured a narration request. Whole-window closure
+calls `Narration:StopSource(owner, reason)`, cancelling that source's delayed
+activation and stopping its accepted request through the existing `Stop()` path.
+This also cancels a request waiting for an earlier presentation's closing animation.
+A close from another source does not stop the current owner. Accepted snapshots
+remain captured during navigation within a visible source. The Talking Head close button calls `Narration:Stop()` to
 clear active/pending presentation ownership and scheduled automatic narration,
 then starts closing, which immediately calls `TTS:Stop()`.
 
@@ -1202,8 +1222,9 @@ It forwards the existing end, playback-start, and text-progress callbacks from
 `TTS:Speak()` to the same Talking Head. New narration replaces ownership before
 TTS cancels the previous session, so a stale callback cannot hide the new speaker.
 Sentence streaming, loading, sentence fades, paged scrolling, and close/cancel
-behavior remain in their existing services. Closing the Quest Log hides its button;
-accepted snapshots continue, including while closing/opening or awaiting submission.
+behavior remain in their existing services. Closing the Quest Log or returning
+Back from its detail viewport stops its owned narration and closes Talking Head.
+Selection changes inside a visible detail viewport preserve accepted snapshots.
 
 The general lifecycle validation does not establish every Quest Log button
 placement/visibility case, player appearance/voice token, or description-only read
@@ -1257,11 +1278,12 @@ uses `Unknown`; an unusable player/narrator voice stops the request.
 `Narration:Speak()` receives the original text and captured title, so later gossip
 pages cannot change an active display. The TTS controller handles sentence
 streaming, rate, sanitization, XML escaping, ownership and replacement.
-Closing GossipFrame hides its button and prevents another read; as with QuestFrame,
-it does not stop an existing narration. Subsequent reads recapture identity/text
+Closing GossipFrame hides its button, cancels its automatic activation and stops
+its owned narration. Greeting/options refreshes within the visible whole frame
+do not count as closure. Subsequent reads recapture identity/text
 and clear the shared inspection model before loading. Starting gossip speech
 cancels a pending automatic quest request when the shared narration request is
-accepted, before its opening completes. Closing/updating gossip does not cancel
+accepted, before its opening completes. Updating visible gossip does not cancel
 accepted snapshots. Auto Play can replace them through the normal narration path
 when the next readable gossip text is activated.
 

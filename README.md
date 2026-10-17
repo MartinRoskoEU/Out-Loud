@@ -14,7 +14,8 @@ while speech is generated and played.
 Manual Out Loud buttons connect current quest and gossip dialogue to the NPC's voice, or
 selected Quest Log descriptions to the player's voice, Talking Head, and speech.
 QuestFrame, NPC gossip and readable-item narration can also start automatically when enabled in Options;
-Quest Log narration remains manual. Talking Head closes when narration ends,
+Quest Log narration remains manual. Closing a narration's source window stops its
+speech and closes Talking Head. Talking Head also closes when narration ends,
 and the loading spinner clears when owned playback begins.
 
 ## Current Features

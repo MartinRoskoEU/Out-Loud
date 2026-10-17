@@ -53,11 +53,16 @@ local function Harness(client, auto, delay)
     -- Exercise speech forwarding only, without creating a presentation or native speech.
     function addon.Narration:Speak(...)
         test.calls[#test.calls + 1] = { ... }
+        self.Narration = { owner = select(8, ...), source = select(5, ...) }
         if test.onSpeak then test.onSpeak() end
         return true
     end
-    function addon.Narration:Stop() test.stops = test.stops + 1 end
+    function addon.Narration:Stop()
+        test.stops = test.stops + 1
+        self.Narration = nil
+    end
     local gossip = addon.UI.GossipIntegration
+    gossip.Frame = { IsShown = function() return test.shown end }
     function gossip:GetCurrentText()
         if test.shown and type(test.text) == "string" and test.text:find("%S") then return test.text end
     end
@@ -148,7 +153,7 @@ Test("Text/name changes and close cancel old callbacks; reopening can read again
     Equal(test.calls[1][4], "Another NPC")
     test.shown = false
     test.gossip:OnHidden()
-    Equal(test.stops, 0, "Closing leaves an accepted narration snapshot alone")
+    Equal(test.stops, 1, "Closing stops the accepted gossip request")
 end)
 Test("Activation revalidates changed data even before a UI refresh", function(client)
     local test = Harness(client, true, 2)

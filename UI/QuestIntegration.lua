@@ -109,6 +109,13 @@ function QuestIntegration:CancelPendingAutoNarration()
     OutLoud.Narration:CancelAutoNarration(self)
 end
 
+function QuestIntegration:OnHidden()
+    -- Panel/stage changes are not closure of the containing quest dialogue.
+    if self.Frame:IsShown() then return end
+    OutLoud.Narration:StopSource(self, "quest-closed")
+    self:UpdateButtonVisibility()
+end
+
 function QuestIntegration:IsAutoNarrationCurrent(request)
     -- This guards activation before capture, never an accepted narration snapshot.
     if not OutLoud.Database:GetAutoNarrateQuests() or GetQuestID() ~= request.questID then
@@ -192,7 +199,7 @@ function QuestIntegration:SpeakCurrentText()
     if singleVoice then
         speakerUnit = "player"
     end
-    return OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitle, "Quest", info.modelFileID)
+    return OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitle, "Quest", info.modelFileID, nil, self)
 end
 
 function QuestIntegration:Initialize()
@@ -262,10 +269,7 @@ function QuestIntegration:Initialize()
         end
     end)
     frame:HookScript("OnShow", Refresh)
-    frame:HookScript("OnHide", function()
-        self:CancelPendingAutoNarration()
-        Refresh()
-    end)
+    frame:HookScript("OnHide", function() self:OnHidden() end)
     greetingPanel:HookScript("OnShow", Refresh)
     greetingPanel:HookScript("OnHide", Refresh)
     for _, panel in ipairs(panels) do

@@ -37,7 +37,7 @@ local function Harness(auto, delay)
     function addon.Narration:Speak(...)
         local call = { ... }
         test.calls[#test.calls + 1] = call
-        self.Narration = { onRequestEnded = call[7] }
+        self.Narration = { onRequestEnded = call[7], owner = call[8], source = call[5] }
         return true
     end
     function addon.Narration:Stop()

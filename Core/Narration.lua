@@ -103,6 +103,17 @@ function Narration:Stop(reason, diagnosticTrigger)
     end
 end
 
+-- A source close only owns its delay and its accepted request, including one
+-- waiting for the previous presentation to finish closing. Reuse normal STOP.
+function Narration:StopSource(owner, reason)
+    if not owner then return end
+    self:CancelAutoNarration(owner)
+    local request = self.Narration
+    if request and request.owner == owner then
+        self:Stop(reason, request.source)
+    end
+end
+
 function Narration:OnClosed()
     local talkingHead = OutLoud.UI.TalkingHead
     local request = self.Narration
@@ -145,7 +156,7 @@ end
 
 -- Capture once; navigation cannot change an accepted narration's content.
 -- Returns acceptance; a replacement may wait for the current presentation to close.
-function Narration:Speak(unit, text, voiceID, displayTitle, diagnosticSource, modelFileID, onRequestEnded)
+function Narration:Speak(unit, text, voiceID, displayTitle, diagnosticSource, modelFileID, onRequestEnded, sourceOwner)
     self:Initialize()
     if not unit or not UnitExists(unit) then return false, "unit-unavailable" end
     local speaker = {
@@ -159,7 +170,7 @@ function Narration:Speak(unit, text, voiceID, displayTitle, diagnosticSource, mo
     local request = {
         id = self.RequestID, speaker = speaker, text = text, voiceID = voiceID,
         source = type(diagnosticSource) == "string" and diagnosticSource or "Narration",
-        onRequestEnded = onRequestEnded,
+        onRequestEnded = onRequestEnded, owner = sourceOwner,
     }
     -- Change ownership before native STOP can synchronously notify the outgoing session.
     local previous = self.Narration
