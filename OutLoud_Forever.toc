@@ -4,6 +4,7 @@
 ## Author: Nendis
 ## Version: 0.1.0
 ## SavedVariables: OutLoudDB
+## SavedVariablesPerCharacter: OutLoudCharacterDB
 ## LoadSavedVariablesFirst: 1
 
 Core\Namespace.lua

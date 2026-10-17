@@ -3,6 +3,7 @@ local AddonName, OutLoud = ...
 OutLoud.Client = {
     ID = "Retail",
     SavedVariables = "OutLoudRetailDB",
+    SavedVariablesPerCharacter = "OutLoudRetailCharacterDB",
     -- Player narration uses UnitRace's token, independently of NPC model data.
     PlayerRaceFamilies = {
         Worgen = "WORGEN",

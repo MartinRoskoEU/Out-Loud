@@ -3,6 +3,11 @@ local AddonName, OutLoud = ...
 local Database = {}
 OutLoud.Database = Database
 
+Database.SingleVoiceAssignments = {
+    ALL = "allCharacters",
+    CHARACTER = "perCharacter",
+}
+
 Database.AutoNarrationDelay = {
     DEFAULT = 2,
     MIN = 0,
@@ -39,6 +44,11 @@ local function NormalizeVoiceMode(mode)
     return mode == modes.SINGLE and modes.SINGLE or modes.RACE_GENDER
 end
 
+local function NormalizeSingleVoiceAssignment(assignment)
+    local assignments = Database.SingleVoiceAssignments
+    return assignment == assignments.CHARACTER and assignments.CHARACTER or assignments.ALL
+end
+
 function Database:Initialize()
     if self.Initialized then
         return
@@ -63,11 +73,21 @@ function Database:Initialize()
     -- Retire the obsolete preference without resetting other saved settings.
     db.readingMode = nil
     db.voiceMode = NormalizeVoiceMode(db.voiceMode)
+    db.singleVoiceAssignment = NormalizeSingleVoiceAssignment(db.singleVoiceAssignment)
     db.autoNarrationDelay = NormalizeAutoNarrationDelay(db.autoNarrationDelay)
     db.speechRate = NormalizeSpeechRate(db.speechRate)
 
     self.DB = db
     OutLoud.DB = db
+
+    local characterSavedVariables = OutLoud.Client and OutLoud.Client.SavedVariablesPerCharacter
+        or "OutLoudCharacterDB"
+    local characterDB = _G[characterSavedVariables]
+    if type(characterDB) ~= "table" then
+        characterDB = {}
+        _G[characterSavedVariables] = characterDB
+    end
+    self.CharacterDB = characterDB
 
     self.Initialized = true
 end
@@ -101,11 +121,35 @@ function Database:SetVoiceMode(mode)
 end
 
 function Database:GetSingleVoice()
+    if self:GetSingleVoiceAssignment() == self.SingleVoiceAssignments.CHARACTER
+        and self:HasCharacterSingleVoice() then
+        return self.CharacterDB.singleVoice
+    end
     return self.DB.singleVoice
 end
 
 function Database:SetSingleVoice(voiceID)
-    self.DB.singleVoice = voiceID
+    if self:GetSingleVoiceAssignment() == self.SingleVoiceAssignments.CHARACTER then
+        self.CharacterDB.singleVoice = voiceID
+    else
+        self.DB.singleVoice = voiceID
+    end
+end
+
+function Database:GetSingleVoiceAssignment()
+    return NormalizeSingleVoiceAssignment(self.DB.singleVoiceAssignment)
+end
+
+function Database:SetSingleVoiceAssignment(assignment)
+    self.DB.singleVoiceAssignment = NormalizeSingleVoiceAssignment(assignment)
+end
+
+function Database:HasCharacterSingleVoice()
+    return self.CharacterDB.singleVoice ~= nil
+end
+
+function Database:ResetCharacterSingleVoice()
+    self.CharacterDB.singleVoice = nil
 end
 
 function Database:GetAutoNarrateQuests()

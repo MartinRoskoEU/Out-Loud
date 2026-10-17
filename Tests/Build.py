@@ -81,6 +81,12 @@ class ReleaseChecks(unittest.TestCase):
             }[client]
             self.assertEqual(metadata["Interface"], expected_interface)
             self.assertEqual(metadata["SavedVariables"], expected_saved)
+            expected_character_saved = {
+                "Forever": "OutLoudCharacterDB", "Retail": "OutLoudRetailCharacterDB",
+            }[client]
+            self.assertEqual(metadata["SavedVariablesPerCharacter"], expected_character_saved)
+            config = (ROOT / f"Clients/{client}/Config.lua").read_text()
+            self.assertIn(f'SavedVariablesPerCharacter = "{expected_character_saved}"', config)
             self.assertEqual(metadata["Notes"],
                              f"Text-to-speech addon for World of Warcraft: {client}")
             self.assertEqual(metadata["LoadSavedVariablesFirst"], "1")

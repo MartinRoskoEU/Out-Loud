@@ -94,9 +94,13 @@ for _, client in ipairs({ "Forever", "Retail" }) do
     quest:SpeakCurrentText()
     Equal(captured[1], "player", "Unknown NPC gender uses existing Player Narrator fallback")
     Equal(captured[3], client == "Forever" and 7 or 8)
+    modelID, sex = 0, 2
+    quest:SpeakCurrentText()
+    Equal(captured[1], "player", "An inspection result that is not ready keeps the existing player fallback")
+    Equal(captured[3], client == "Forever" and 7 or 8)
     local gossip = addon.UI.GossipIntegration
     gossip.GetCurrentText = quest.GetCurrentText
-    for _, inputs in ipairs({ { 999999, 2 }, { 959310, 1 } }) do
+    for _, inputs in ipairs({ { 999999, 2 }, { 959310, 1 }, { 0, 2 } }) do
         modelID, sex = inputs[1], inputs[2]
         gossip:SpeakCurrentText()
         Equal(captured[1], "player", "Gossip preserves unknown-model/sex fallback")

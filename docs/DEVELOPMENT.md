@@ -229,6 +229,22 @@ it unregisters and clears its handler when the required Blizzard UI globals exis
   voice ID using the same numeric ID convention as existing family assignments.
   The schema adds no migration and does not rewrite the family assignment table.
   Switching modes preserves both settings and never calls TTS start/stop.
+- Each client's global `singleVoiceAssignment` is `"allCharacters"` (default,
+  including invalid values) or `"perCharacter"`. The assignment choice is shared
+  across that client's characters; it applies only to Single Voice narration.
+  The original global `singleVoice` remains unchanged when adding this feature.
+  Forever declares `OutLoudCharacterDB` and Retail declares
+  `OutLoudRetailCharacterDB` in `SavedVariablesPerCharacter`; their configurations
+  select the same names. WoW provides the current character's table, so no character
+  names, GUID registry, deletion tracking, or cleanup are needed.
+  Only an explicit dropdown selection writes `CharacterDB.singleVoice` in Per
+  Character mode. `Database:GetSingleVoice()` returns that override when present,
+  otherwise the current global voice, without saving an inherited value. Voice ID
+  zero counts as an override. `SetSingleVoice()` writes the selected scope only;
+  switching scope writes no voice values. `ResetCharacterSingleVoice()` removes
+  the override. Choosing "Not set" in Per Character mode also removes the override
+  and resumes inheritance. An unavailable saved override remains stored and uses
+  the existing unavailable-voice error behavior.
 - `Clients/Forever/VoiceMappings.lua` and `Clients/Retail/VoiceMappings.lua` contain
   client-specific `VoiceMappings.Families` and direct
   `VoiceMappings.Models[FileDataID]` family mappings. It can be replaced with
@@ -283,7 +299,12 @@ ID stability across restart/enumeration changes is unverified. If the client reu
 an ID for another voice, Out Loud cannot reliably detect/remap it from this schema;
 verify the displayed selection after changing installed voices.
 
-The Voice Assignment radio group uses the existing `UIRadioButtonTemplate`.
+The Voices section's Single/Multiple Voice group and the Single Voice assignment
+scope group use the existing `UIRadioButtonTemplate`. Scope controls are disabled
+in Multiple Voices mode. The one existing narrator dropdown reads the effective
+voice and refreshes immediately after a scope change, selection, or reset. The
+Reset to Global button is enabled only in Single Voice / Per Character mode with
+an override. Family voice controls and their storage are unchanged.
 Both configuration areas stay visible. `ComboBox:SetEnabled()` delegates to
 the native `SettingsDropdownWithButtonsTemplate` mixin, disabling the dropdown
 and both steppers; disabled callbacks are also guarded and open menus close.
@@ -295,6 +316,25 @@ The native `SetEnabled`, `SetSelectionText`, `GenerateMenu`, and `CloseMenu`
 behavior was inspected in the local Forever export's setting controls, shared
 panel templates, and menu code. Native styling and interaction require a manual
 client check; no simulated Settings environment is maintained.
+
+Targeted narrator validation (run from the addon root with Lua 5.1):
+
+```sh
+lua Tests/Narrator.lua
+lua Tests/VoiceSelection.lua
+lua Tests/Clients.lua
+python Tests/Build.py ReleaseChecks.test_direct_development_tocs
+```
+
+`Tests/Narrator.lua` exercises production database and resolver modules with supplied
+saved tables for two characters in each client. It checks dynamic inheritance,
+overrides (including zero and unavailable IDs), scope switching, reset, preservation
+of global/family settings, character/client isolation, and module reloads against
+retained saved tables. UI callback wiring, one-dropdown reuse, and TOC persistence
+declarations are checked statically. These tests do not simulate frames or native
+SavedVariables serialization. Logic/static validation passed; actual saving across
+logout/reload, character switching, and native Settings interaction have not been
+tested in-game for this feature.
 
 NPC and player resolution share gender naming and configured-voice lookup;
 their model/race lookups and failure reasons remain distinct. Missing or malformed
@@ -659,6 +699,9 @@ Standalone Lua 5.1 checks under `Tests/` include:
   saved-value checks. Small supplied unit/model/voice inputs isolate selection
   decisions. It loads no UI, creates no frames, delivers no events, and does not
   verify model loading, native voice availability or WoW SavedVariables persistence.
+- `Tests/Gossip.lua` checks automatic activation, deduplication, cancellation, quest
+  suppression, and speech forwarding in both clients with supplied dialogue data
+  and recorded timer callbacks. Hook wiring is static; no native UI/events run.
 - `Tests/ItemText.lua` checks page identity, readiness predicates, manual navigation,
   sequential continuation, shared automatic activation scheduling/cancellation and
   markup normalization with supplied scalar
@@ -752,9 +795,9 @@ local accepted = OutLoud.Narration:Speak(speakerUnit, text, voiceID, displayTitl
 The existing Talking Head singleton is under `OutLoud.UI.TalkingHead`, not a
 separate `OutLoud.TalkingHead`. `Narration:Speak(unit, text, voiceID, displayTitle,
 diagnosticSource, modelFileID)` captures speaker name/faction at acceptance.
-Quest/Gossip pass the already-resolved model FileDataID for NPC
-portraits. `TalkingHead:Show(speaker, text, onOpening)` receives only captured
-data and prepares its first normalized sentence. Omitting
+Quest/Gossip pass the speaking UnitToken and already-resolved model FileDataID.
+The UnitToken drives the portrait; FileDataID remains voice-resolution metadata. `TalkingHead:Show(speaker, text, onOpening)`
+receives captured narration data and prepares its first normalized sentence. Omitting
 the narration title captures `UnitName(unit)` at request time.
 Quest narration passes an empty override if its title is missing, which displays
 `"Quest"` instead of a previous title or a unit name. The title is set once per
@@ -793,8 +836,8 @@ The visual singleton owns `State`: `Closed`, `Opening`, `Opened`, `Closing`.
 `Narration.Narration` holds only the latest accepted request. Text, resolved voice,
 speaker name/faction/model asset and source form its immutable
 content. Submission bookkeeping is separate mutable request state. Accepted
-content is not reread or revalidated against live quest/gossip UI during closing,
-opening or submission. Request-time integration guards remain required.
+text/title/voice are not reread or revalidated against live quest/gossip UI during
+closing, opening or submission. Request-time integration guards remain required.
 
 1. Replacement establishes the new owner and stops current TTS immediately,
    before any exit animation work.
@@ -838,16 +881,44 @@ Quest Log still rejects a click when selected quest and displayed details disagr
 or required UI/text/index data is unavailable; rejection leaves the current owner
 alone. Navigation itself never creates a new narration request.
 
-NPC portraits render the captured FileDataID with `PlayerModel:SetModel(asset)`;
-the local `SimpleModelAPIDocumentation.lua` declares its ModelAsset argument.
-This avoids binding a delayed portrait to a different live `questnpc`/`npc`.
-The request carries the model ID already validated by voice resolution; it does
-not guess models or reload source NPCs. Missing/failed assets leave a cleared
-portrait and do not discard narration. Player narration retains the known
-`SetUnit("player")` path. The lifecycle has user-reported in-game validation, but
-a model FileDataID does not capture NPC display textures/equipment/customization.
-That report does not establish every NPC asset's appearance; check affected
-portraits visually in Forever. Portrait animations are unchanged.
+#### Shared NPC portrait rendering
+
+Both clients use the same `PlayerModel:SetUnit` portrait path. Quest narration
+supplies `questnpc`, gossip supplies `npc`, and player narration retains
+`SetUnit("player")`. Each opening clears the old model, restores its shown state,
+and explicitly binds the new speaker before the root is shown. If an NPC token
+is unavailable at opening, the cleared portrait is hidden; a subsequent valid
+speaker restores it before rebinding. This does not cancel captured narration.
+
+The user verified in both Forever and Retail that `SetModel(FileDataID)` loses the
+complete NPC appearance, `SetUnit("npc")` renders the fully textured NPC, a call
+under a hidden parent can return false yet load when the parent becomes visible,
+and NPC -> Player -> NPC works on one PlayerModel. Consequently portrait rendering
+never uses FileDataID and ignores the initial `SetUnit` return value. No GUID
+ownership checks, model-load callbacks, alternate model APIs, retries, or narration
+delays are added. Idle animation, portrait zoom, and opening/closing sequencing
+are unchanged.
+
+NPC inspection remains separate: it still uses `SetUnit(unit)` and
+`GetModelFileID()` for client-specific voice-family selection. Generated mappings,
+runtime gender, Player Narrator fallback, and settings are unchanged. FileDataID
+remains captured request metadata, not an appearance snapshot.
+
+`Tests/TalkingHead.lua` checks the shared portrait source contract without loading
+production modules or supplying mocked WoW APIs. Run from the addon root:
+
+```sh
+lua Tests/TalkingHead.lua
+```
+
+For this update, targeted static source checks and Lua 5.1 compilation passed;
+no standalone mock suites or in-game tests were run. The API behavior above is
+user-reported in-game evidence, not verification of this integrated revision.
+If a token disappears during closing, the portrait is hidden at the next opening.
+If it is reassigned, it can render the new occupant: captured text/name/voice do
+not freeze the live unit's appearance. Loading timing and later token changes
+during a presentation remain runtime uncertainties; no identity tracking or
+model readiness gate is introduced.
 
 Logical source walkthrough for this revision (not executed tests):
 
@@ -979,7 +1050,7 @@ step; invalid values use the default. Valid existing values are preserved.
 `Database.AutoNarrationDelay` supplies the shared default, bounds, and step.
 
 The Settings section is labelled **Narration** and starts with the
-**Automatically read quest and item text** checkbox, followed by automatic delay and speech
+**Automatically read quest, gossip and item text** checkbox, followed by automatic delay and speech
 rate controls. It has no reading-mode selector or redundant single-choice control.
 The checkbox uses
 `SettingsCheckboxTemplate`, `SettingsCheckboxMixin:Init()`, and its
@@ -1022,8 +1093,9 @@ stepper/drag interaction, `/reload` persistence, and audible speed at -10, 0,
 and +10 with Split Text. Check rate changes during split playback and
 confirm subsequent submissions adopt the new rate without interrupting audio.
 
-Only the existing `QuestFrame` `OnEvent` post-hook schedules automatic narration,
-after Blizzard handles the event and Out Loud refreshes button visibility:
+For quest dialogue, only the existing `QuestFrame` `OnEvent` post-hook schedules
+automatic narration, after Blizzard handles the event and Out Loud refreshes
+button visibility:
 
 | Event | Current dialogue source |
 | --- | --- |
@@ -1055,8 +1127,8 @@ submission exists. The `TTS:StartSession()` hook remains necessary for direct TT
 calls. Disabling automatic narration cancels only activation still waiting for
 its configurable delay; a captured/accepted snapshot remains owned until replaced,
 stopped or completed, including while the previous presentation is closing.
-Cancelled callbacks cannot revive an old request. There are no extra event
-frames, polling, or show/hide narration triggers; the timer only schedules the
+Cancelled callbacks cannot revive an old quest request. The quest path adds no
+event frames, polling, or show/hide narration triggers; the timer only schedules the
 automatic path, without changing TTS generation or streaming.
 
 The manual button's visibility and placement are independent of these settings.
@@ -1148,17 +1220,20 @@ The local Forever export loads `Shared/GossipFrameShared.lua` and
 `Mainline/GossipFrame.lua`/`.xml` through `Blizzard_UIPanels_Game.toc`.
 `GossipFrameSharedMixin:Update()` inserts `C_GossipInfo.GetText()` as the greeting
 before inserting separate quest and option entries. `GossipInfoDocumentation.lua`
-also declares this API. Out Loud reads only `C_GossipInfo.GetText()` at the click;
-it never extracts option labels, player responses or quest-list text.
+also declares this API. Out Loud reads only `C_GossipInfo.GetText()` for manual
+and automatic activation; it never extracts option labels, player responses or
+quest-list text.
 
 `Mainline/CustomGossipFrameBase.lua` routes `GOSSIP_SHOW` and `GOSSIP_CLOSED`
 through `CustomGossipFrameManager` to the standard frame's `HandleShow()` and
 `HandleHide()`. `HandleShow()` calls `Update()`. Out Loud installs a post-hook on
 the frame's `Update()` method, plus show/hide hooks on the frame, greeting panel
-and Goodbye. These hooks only refresh visibility, including page changes with
-the frame already open. There are no extra gossip-event registrations, polling,
-automatic narration triggers or model-loading timers. Initialization uses one
-guarded `ADDON_LOADED` observer if the native layout is absent, without force-loading UI.
+and Goodbye. These existing hooks now refresh visibility and observe readable
+text/name changes, including pages updated while the frame remains open. Root
+hiding explicitly clears pending activation and the observed dialogue. No second
+GOSSIP_SHOW/CLOSED registration, polling, or model-loading timer is added.
+Initialization uses one guarded `ADDON_LOADED` observer if the native layout is
+absent, without force-loading UI.
 
 `Core/NPCInspection.lua` retains one unparented, unhidden PlayerModel.
 `GetModel()` creates it once; `LoadUnit(unit)` clears the previous model and calls
@@ -1168,7 +1243,7 @@ the same load helper for `"questnpc"`; gossip uses `"npc"`. Talking Head's portr
 model remains separate. A failed/unready model uses the existing player fallback,
 without guessing a previous model or delaying speech.
 
-On each manual click, gossip captures current text and the NPC name. Single Voice
+On manual or automatic activation, gossip captures current text and the NPC name. Single Voice
 uses `VoiceSelection:ResolvePlayer()` to select the configured narrator without
 requiring NPC model/family/gender readiness; it displays the player model and NPC
 name. Multiple Voices loads `"npc"` and calls `VoiceSelection:Resolve("npc", model)`:
@@ -1182,10 +1257,66 @@ pages cannot change an active display. The TTS controller handles sentence
 streaming, rate, sanitization, XML escaping, ownership and replacement.
 Closing GossipFrame hides its button and prevents another read; as with QuestFrame,
 it does not stop an existing narration. Subsequent reads recapture identity/text
-and clear the shared inspection model before loading. Starting manual gossip
-speech cancels a pending automatic quest request when the shared narration request
-is accepted, before its opening completes. Closing/updating gossip does not cancel
-accepted snapshots. Opening or updating gossip never starts speech.
+and clear the shared inspection model before loading. Starting gossip speech
+cancels a pending automatic quest request when the shared narration request is
+accepted, before its opening completes. Closing/updating gossip does not cancel
+accepted snapshots. Auto Play can replace them through the normal narration path
+when the next readable gossip text is activated.
+
+Gossip Auto Play reuses `Database:GetAutoNarrateQuests()` and
+`GetAutoNarrationDelay()` without new settings or client-specific logic.
+`Refresh()` retains the last observed text and NPC name before invoking
+`Narration:ScheduleAutoNarration()`. Repeated UI refreshes with unchanged data
+neither restart a pending delay nor replay text after activation or cancellation.
+Text/name changes cancel the old timer and schedule the new dialogue. Returning
+to earlier text after a different response, or reopening the frame, can read it
+again. Empty text, hidden greeting/Goodbye controls, or a visible native QuestFrame
+suppress Gossip Auto Play. The quest integration remains responsible for quest
+pages; it is not modified.
+
+A delayed request checks its observed-dialogue identity, current text/name,
+readability, quest visibility and the enabled setting before calling the existing
+`StartCurrentNarration()` wrapper. Zero delay uses that same wrapper immediately.
+`SpeakCurrentText()` cancels a pending automatic activation and records the
+manually/automatically selected dialogue, then uses the existing voice resolver
+and `Narration:Speak()` once. The snapshot used during the delay is a predicate,
+not the accepted text/voice request.
+
+Post-hooks on `Narration:Speak/Stop`, `TTS:Stop/StartSession`, and disabling the
+existing automatic narration setting cancel pending Gossip Auto Play. The
+observed dialogue is retained so repeated refreshes cannot undo STOP, another
+source's interruption, or a manual click. `TTS:Stop("finished")` is excluded:
+normal completion of the previous response must not cancel the next response's
+pending delay. Enabling Auto Play while the same
+already-observed dialogue remains open does not rearm it; opening or a text/name
+change is the trigger. Accepted narration continues under the existing shared
+lifecycle until replaced, stopped, or finished.
+
+Targeted validation passed with Lua 5.1 (`lupa.lua51.LuaRuntime`):
+
+```sh
+lua Tests/Gossip.lua
+lua Tests/Clients.lua
+lua Tests/ItemText.lua
+lua Tests/Narration.lua
+```
+
+`Tests/Gossip.lua` exercises the production shared scheduler, Gossip controller,
+database and voice resolver with supplied text/name/visibility inputs and explicit
+recorded timer callbacks. Both client configurations cover disabled/manual reads,
+delays 0/2/5, repeated refreshes, text/name changes, close/reopen, stale callbacks,
+manual/STOP cancellation, quest overlap, Single Voice and Multiple Voices/fallback,
+natural-completion versus interruption, zero-delay reentrancy, and unavailable
+voices. Cancellation-hook wiring and shared
+TOC loading are checked statically. No frames are constructed, UI events dispatched,
+native timer timing simulated, or speech submitted. Static/logic checks do not prove
+native event ordering, token readiness, actual model rendering or audible behavior.
+
+No in-game testing was performed for this extension. Existing source inspection
+establishes the hook paths, while runtime timing remains unverified in both clients.
+Text/name deduplication cannot distinguish different NPCs with identical names and
+text if the UI never exposes a close/change. Custom gossip windows remain outside
+the standard GossipFrame integration.
 
 Source inspection establishes the API/layout and routed lifecycle above. The user
 reported in-game `"npc"` availability, name, sex, `SetUnit("npc")` and a valid model
@@ -1195,7 +1326,9 @@ order, immediate readiness across NPC switches, portrait/title appearance,
 audio/bookmark edge cases or scrolling.
 Check both voice assignment modes, empty greeting/options-only pages,
 repeated clicks, NPC/page changes, close/reopen, fallback, and Gossip-before-QuestFrame
-loading. Repeat with automatic quest narration enabled to confirm gossip stays manual.
+loading. For Gossip Auto Play, verify zero/nonzero delay, repeated native updates,
+subsequent response text, manual override, STOP, close/reopen, and transition into
+quest pages without duplicate narration in each client.
 
 ### Talking Head visual animations
 
@@ -1210,7 +1343,8 @@ anchored to `UIParent`'s top with a Y offset of -60. Forever keeps scale 1.05 an
 `BACKGROUND` strata; Retail keeps scale 1 and `HIGH` strata.
 Faction atlas selection uses captured speaker data; name colors, text styling,
 and internal text anchors follow the Blizzard reference. Player portraits keep
-`SetUnit("player")`; NPC portraits use the captured model asset described above.
+`SetUnit("player")`; NPC portraits on both clients use the supplied NPC UnitToken
+through the shared `SetUnit` path described above.
 
 The root stays at alpha 1. The common text/scrollbar parent resets to alpha 0.
 Other animated regions reset to alpha 0.01, including the

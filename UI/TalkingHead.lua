@@ -258,13 +258,17 @@ function TalkingHead:Show(speaker, text, onOpening)
     )
 
     self.Model:ClearModel()
+    -- Restore a portrait hidden for an unavailable speaker before rebinding it.
+    self.Model:Show()
+    -- A hidden parent can make SetUnit return false yet load when the parent is shown.
+    -- Do not use that return value to reject the portrait or delay narration.
     if speaker.unit == "player" then
-        -- Player identity is stable; never look up a live questnpc/npc after capture.
         self.Model:SetUnit("player")
-    elseif type(speaker.modelFileID) == "number" and speaker.modelFileID > 0 then
-        -- Render the captured asset, even if the original NPC token has changed.
-        local ok, message = pcall(self.Model.SetModel, self.Model, speaker.modelFileID)
-        if not ok then OutLoud:Debug("Talking Head snapshot portrait unavailable:", tostring(message)) end
+    elseif speaker.unit and UnitExists(speaker.unit) then
+        self.Model:SetUnit(speaker.unit)
+    else
+        -- The NPC may disappear while the previous presentation finishes closing.
+        self.Model:Hide()
     end
     self.Model:SetAnimation(0, 0)
 

@@ -13,8 +13,8 @@ while speech is generated and played.
 
 Manual Out Loud buttons connect current quest and gossip dialogue to the NPC's voice, or
 selected Quest Log descriptions to the player's voice, Talking Head, and speech.
-QuestFrame and readable-item narration can also start automatically when enabled in Options;
-Quest Log and gossip narration remain manual. Talking Head closes when narration ends,
+QuestFrame, NPC gossip and readable-item narration can also start automatically when enabled in Options;
+Quest Log narration remains manual. Talking Head closes when narration ends,
 and the loading spinner clears when owned playback begins.
 
 ## Current Features
@@ -29,8 +29,8 @@ and the loading spinner clears when owned playback begins.
   controllable loading spinner.
 - A speech controller that accepts supplied text and a WoW TTS voice ID,
   streams sentences and can cancel narration.
-- Optional automatic narration for quest offer, progress, and reward pages,
-  disabled by default. Manual buttons remain available.
+- Optional automatic narration for quest offer, progress, reward pages and readable
+  NPC gossip, disabled by default. Manual buttons remain available.
 - A manual **Out Loud** button for quest offer, progress, and reward dialogue.
   Single Voice shows the player portrait and quest title. Multiple Voices uses
   the NPC portrait/name, with the existing player fallback, and reads the same dialogue.
@@ -43,6 +43,7 @@ and the loading spinner clears when owned playback begins.
   It reads the current NPC greeting, excluding options and quest lists. Single
   Voice shows the player portrait with the NPC name; Multiple Voices uses the NPC
   portrait and family/gender voice, with the existing player narrator fallback.
+  Auto Play reads newly opened gossip and subsequent text changes using the same button path.
 - An **Out Loud** button near the bottom-right of readable item pages. It uses
   the player's configured voice and reads from the displayed page onward. Each
   page finishes before the addon turns to the next; manual Next/Prev navigation
@@ -80,10 +81,17 @@ For example, the two Skyborne model IDs in the Forever mapping both use
 
 ## Voice Configuration
 
-The **Voice Assignment** radio group selects **Single Voice** or **Multiple Voices**.
+The **Voices** section selects **Single Voice** or **Multiple Voices**.
 The Narrator Voice selector and the existing family rows remain visible. Only the
 active mode's selectors can be used; the other controls appear disabled.
 Switching modes preserves both sets of assignments and leaves current playback running.
+
+In Single Voice mode, **Voice Assignment** chooses **All Characters** (default)
+or **Per Character**, using the same Narrator Voice selector. Characters without
+an override inherit the global voice, including later global changes.
+**Reset to Global** removes only the current character's override. Switching
+assignment modes preserves both selections. Forever and Retail save these settings
+separately.
 
 Each family row provides separate Male and Female selectors. All selectors list
 the same TTS voices available to the game and include a **Not set** option.
@@ -114,11 +122,13 @@ dialogue and voice; later quest navigation does not cancel it. Speech is submitt
 immediately when Talking Head starts opening. Clicking again stops speech
 immediately, finishes closing, then opens the latest requested dialogue.
 
-Enable **Automatically read quest and item text** in the same section to start
-narration when quest details, progress, reward pages, or readable items open. It
-defaults to off and does not apply to Quest Log or gossip. **Automatic narration
-delay** waits before automatically opening Talking Head for quests and readable
-items, starting when their text is ready. It defaults to 2 seconds, adjustable
+Enable **Automatically read quest, gossip and item text** in the same section to start
+narration when quest details, progress, reward pages, readable NPC gossip, or readable
+items open. It defaults to off and does not apply to Quest Log. **Automatic narration
+delay** waits before automatically opening Talking Head for quests, gossip and readable
+items, starting when their text is ready. Gossip text changes restart this delay;
+closing the dialogue, manual playback, STOP, or another narration source cancels it.
+The delay defaults to 2 seconds, adjustable
 from 0 to 5 seconds in 0.5-second steps. Manual requests skip this delay; item page
 continuation adds no extra delay. All use the same Talking Head opening/closing lifecycle.
 
@@ -137,7 +147,8 @@ at the same top anchor and offset as Forever, retaining its existing scale and h
 
 The mappings, saved voice configuration, voice resolver, Talking Head UI, TTS
 controller, manual QuestFrame, Quest Log and GossipFrame narration, and optional automatic
-QuestFrame narration are implemented. Readable-item narration is also integrated;
+QuestFrame/GossipFrame narration are implemented. Gossip Auto Play has static/logic
+validation only; its native UI timing still requires in-game verification. Readable-item narration is also integrated;
 its button placement, native navigation hooks, and page-to-page audio lifecycle
 still require in-game verification. The underlying ItemText APIs have been
 verified by the user with single-page items and an eight-page book.

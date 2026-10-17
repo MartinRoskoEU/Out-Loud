@@ -7,6 +7,10 @@ local function IsUsableVoiceID(voiceID)
     return type(voiceID) == "number" and voiceID >= 0 and voiceID % 1 == 0
 end
 
+local function SameDialogue(first, second)
+    return first and second and first.text == second.text and first.name == second.name
+end
+
 function GossipIntegration:GetCurrentText()
     if not self.Frame then return nil, "gossip-frame-unavailable" end
     if not self.Frame:IsShown() or not self.GreetingPanel:IsShown() then
@@ -32,6 +36,49 @@ function GossipIntegration:UpdateButtonVisibility()
     end
 end
 
+function GossipIntegration:CancelPendingAutoNarration()
+    OutLoud.Narration:CancelAutoNarration(self)
+end
+
+function GossipIntegration:CaptureAutoNarration()
+    local text = self:GetCurrentText()
+    if not text or not self.GoodbyeButton:IsShown() then return end
+    -- Quest pages have their own automatic activation; never read them as gossip.
+    local questFrame = rawget(_G, "QuestFrame")
+    if questFrame and questFrame:IsShown() then return end
+    return { text = text, name = UnitExists("npc") and UnitName("npc") or "Unknown" }
+end
+
+function GossipIntegration:IsAutoNarrationCurrent(request)
+    return self.AutoNarrationDialogue == request and OutLoud.Database:GetAutoNarrateQuests()
+        and SameDialogue(request, self:CaptureAutoNarration())
+end
+
+function GossipIntegration:Refresh()
+    self:UpdateButtonVisibility()
+    local dialogue = self:CaptureAutoNarration()
+    if SameDialogue(self.AutoNarrationDialogue, dialogue) then return end
+    self:CancelPendingAutoNarration()
+    -- Retain the observed dialogue after activation/cancellation so refreshes
+    -- cannot restart a delay or undo STOP. Closing clears this identity.
+    self.AutoNarrationDialogue = dialogue
+    if not dialogue then return end
+    OutLoud.Narration:ScheduleAutoNarration(self, dialogue,
+        function(pending) return self:IsAutoNarrationCurrent(pending) end,
+        function() self:StartCurrentNarration() end)
+end
+
+function GossipIntegration:OnHidden()
+    self:CancelPendingAutoNarration()
+    self.AutoNarrationDialogue = nil
+    self:UpdateButtonVisibility()
+end
+
+function GossipIntegration:OnTTSStop(reason)
+    -- Finishing the previous response must not cancel the next response's delay.
+    if reason ~= "finished" then self:CancelPendingAutoNarration() end
+end
+
 function GossipIntegration:StartCurrentNarration()
     local ok, message = pcall(self.SpeakCurrentText, self)
     if not ok then
@@ -40,7 +87,8 @@ function GossipIntegration:StartCurrentNarration()
 end
 
 function GossipIntegration:SpeakCurrentText()
-    -- Capture text and identity at the click; never cache a unit token's identity.
+    self:CancelPendingAutoNarration()
+    -- Both activation paths capture current text/name; delayed data is only a guard.
     local text, reason = self:GetCurrentText()
     if not text then
         OutLoud:Error("Gossip read stopped:", reason)
@@ -49,6 +97,7 @@ function GossipIntegration:SpeakCurrentText()
 
     local npcExists = UnitExists("npc")
     local displayTitle = npcExists and UnitName("npc") or "Unknown"
+    self.AutoNarrationDialogue = { text = text, name = displayTitle }
     local selection = OutLoud.VoiceSelection
     local speakerUnit = "player"
     local voiceID, info
@@ -113,22 +162,32 @@ function GossipIntegration:Initialize()
     self.Button = button
 
     local function Refresh()
-        self:UpdateButtonVisibility()
+        self:Refresh()
     end
     -- Forever's CustomGossipFrameManager routes GOSSIP_SHOW/CLOSED to this UI.
-    -- HandleShow and content changes call Update; none of these hooks speak.
+    -- Reuse the existing post-update/visibility hooks, with no second event path.
     hooksecurefunc(frame, "Update", Refresh)
     frame:HookScript("OnShow", Refresh)
-    frame:HookScript("OnHide", Refresh)
+    frame:HookScript("OnHide", function() self:OnHidden() end)
     greeting:HookScript("OnShow", Refresh)
     greeting:HookScript("OnHide", Refresh)
     goodbye:HookScript("OnShow", Refresh)
     goodbye:HookScript("OnHide", Refresh)
+
+    hooksecurefunc(OutLoud.Database, "SetAutoNarrateQuests", function()
+        if not OutLoud.Database:GetAutoNarrateQuests() then
+            self:CancelPendingAutoNarration()
+        end
+    end)
+    hooksecurefunc(OutLoud.Narration, "Speak", function() self:CancelPendingAutoNarration() end)
+    hooksecurefunc(OutLoud.Narration, "Stop", function() self:CancelPendingAutoNarration() end)
+    hooksecurefunc(OutLoud.TTS, "Stop", function(_, reason) self:OnTTSStop(reason) end)
+    hooksecurefunc(OutLoud.TTS, "StartSession", function() self:CancelPendingAutoNarration() end)
 
     self.Initialized = true
     if self.LoadFrame then
         self.LoadFrame:UnregisterEvent("ADDON_LOADED")
         self.LoadFrame:SetScript("OnEvent", nil)
     end
-    self:UpdateButtonVisibility()
+    self:Refresh()
 end

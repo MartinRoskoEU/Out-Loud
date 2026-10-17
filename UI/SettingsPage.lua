@@ -3,9 +3,9 @@ local AddonName, OutLoud = ...
 local SettingsPage = {}
 OutLoud.UI.SettingsPage = SettingsPage
 
-local AUTO_NARRATION_LABEL = "Automatically read quest and item text"
-local AUTO_NARRATION_DESCRIPTION = "Automatically starts narration when opening quest details, quest progress, quest reward pages, or readable items. Readable items continue page by page. Quest Log and gossip narration remain manual."
-local AUTO_DELAY_DESCRIPTION = "Waits before automatically starting quest or readable-item narration, allowing existing dialogue to finish first. This delay does not affect manual narration or continuation between item pages."
+local AUTO_NARRATION_LABEL = "Automatically read quest, gossip and item text"
+local AUTO_NARRATION_DESCRIPTION = "Automatically starts narration when opening quest details, quest progress, quest reward pages, readable NPC gossip, or readable items. Gossip text changes start a new reading; readable items continue page by page. Quest Log narration remains manual."
+local AUTO_DELAY_DESCRIPTION = "Waits before automatically starting quest, gossip or readable-item narration, allowing existing dialogue to finish first. This delay does not affect manual narration or continuation between item pages."
 
 local VOICES_LAYOUT = {
     -- Align family labels with the radio descriptions and narrator controls.
@@ -190,7 +190,7 @@ function SettingsPage:CreateVoiceAssignmentSection()
     local header = CreateFrame("Frame", nil, self.Content, "SettingsListSectionHeaderTemplate")
     header:SetPoint("TOPLEFT", 7, -70)
     header:SetPoint("TOPRIGHT", -7, -70)
-    header.Title:SetText("Voice Assignment")
+    header.Title:SetText("Voices")
     self.VoiceAssignmentHeader = header
 
     local modes = OutLoud.VoiceSelection.AssignmentModes
@@ -223,8 +223,37 @@ function SettingsPage:CreateVoiceAssignmentSection()
         previous = description
     end
 
+    local assignmentLabel = self.Content:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    assignmentLabel:SetPoint("TOPLEFT", self.SingleVoiceDescription, "BOTTOMLEFT", 0, -18)
+    assignmentLabel:SetText("Voice Assignment")
+    self.NarratorAssignmentLabel = assignmentLabel
+
+    local assignments = OutLoud.Database.SingleVoiceAssignments
+    local previousAssignment = assignmentLabel
+    for _, option in ipairs({
+        { assignment = assignments.ALL, label = "All Characters", key = "AllCharacters" },
+        { assignment = assignments.CHARACTER, label = "Per Character", key = "PerCharacter" },
+    }) do
+        local assignment = option.assignment
+        local button = CreateFrame("CheckButton", nil, self.Content, "UIRadioButtonTemplate")
+        if previousAssignment == assignmentLabel then
+            button:SetPoint("TOPLEFT", assignmentLabel, "BOTTOMLEFT", 0, -8)
+        else
+            button:SetPoint("LEFT", previousAssignment, "RIGHT", 145, 0)
+        end
+        button.text:SetFontObject(GameFontNormal)
+        button.text:SetText(option.label)
+        button:SetScript("OnClick", function()
+            if not OutLoud.VoiceSelection:IsSingleVoiceMode() then return end
+            OutLoud.Database:SetSingleVoiceAssignment(assignment)
+            self:RefreshVoiceAssignment()
+        end)
+        self[option.key .. "Button"] = button
+        previousAssignment = button
+    end
+
     local label = self.Content:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-    label:SetPoint("TOPLEFT", self.SingleVoiceDescription, "BOTTOMLEFT", 0, -18)
+    label:SetPoint("TOPLEFT", self.AllCharactersButton, "BOTTOMLEFT", 0, -18)
     label:SetText("Narrator Voice")
     local combo = OutLoud.Classes.ComboBox:New(self.Content, VOICES_LAYOUT.voiceControlWidth)
     combo.Frame:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -8)
@@ -232,7 +261,20 @@ function SettingsPage:CreateVoiceAssignmentSection()
         return OutLoud.Database:GetSingleVoice()
     end, function(voiceID)
         OutLoud.Database:SetSingleVoice(voiceID)
+        self:RefreshVoiceAssignment()
     end)
+
+    local reset = CreateFrame("Button", nil, self.Content, "UIPanelButtonTemplate")
+    reset:SetSize(120, 22)
+    reset:SetPoint("LEFT", combo.Frame, "RIGHT", 12, 0)
+    reset:SetText("Reset to Global")
+    reset:SetScript("OnClick", function()
+        if not OutLoud.VoiceSelection:IsSingleVoiceMode()
+            or OutLoud.Database:GetSingleVoiceAssignment() ~= assignments.CHARACTER then return end
+        OutLoud.Database:ResetCharacterSingleVoice()
+        self:RefreshVoiceAssignment()
+    end)
+    self.NarratorVoiceResetButton = reset
 
     local description = self.Content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
     description:SetPoint("TOPLEFT", combo.Frame, "BOTTOMLEFT", 0, -8)
@@ -240,7 +282,7 @@ function SettingsPage:CreateVoiceAssignmentSection()
     description:SetJustifyH("LEFT")
     description:SetJustifyV("TOP")
     description:SetWordWrap(true)
-    description:SetText("Select the voice used for all quest narration.")
+    description:SetText("Select the narrator voice. Per Character uses the global voice until you choose an override. Reset to Global restores inheritance.")
     self.SingleVoiceComboBox = combo
     self.NarratorVoiceLabel = label
     self.NarratorVoiceDescription = description
@@ -254,6 +296,16 @@ function SettingsPage:RefreshVoiceAssignment()
     local single = OutLoud.VoiceSelection:IsSingleVoiceMode()
     self.SingleVoiceButton:SetChecked(single)
     self.RaceGenderButton:SetChecked(not single)
+    local character = OutLoud.Database:GetSingleVoiceAssignment()
+        == OutLoud.Database.SingleVoiceAssignments.CHARACTER
+    self.AllCharactersButton:SetChecked(not character)
+    self.PerCharacterButton:SetChecked(character)
+    for _, button in ipairs({ self.AllCharactersButton, self.PerCharacterButton }) do
+        button:SetEnabled(single)
+        button.text:SetFontObject(single and GameFontNormal or GameFontDisable)
+    end
+    self.NarratorAssignmentLabel:SetFontObject(single and GameFontNormal or GameFontDisable)
+    self.NarratorVoiceResetButton:SetEnabled(single and character and OutLoud.Database:HasCharacterSingleVoice())
     self.SingleVoiceComboBox:SetEnabled(single)
     self.SingleVoiceComboBox:Refresh()
     self.NarratorVoiceLabel:SetFontObject(single and GameFontNormal or GameFontDisable)
