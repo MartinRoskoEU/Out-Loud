@@ -40,10 +40,9 @@ function QuestLogIntegration:UpdateButtonVisibility()
         return
     end
 
-    -- Mirror Back's native LEFT anchor in BackFrame (11, 4 in the local XML).
-    local _, _, _, inset, offsetY = self.BackButton:GetPoint(1)
+    -- Follow Back in either client, leaving the header's right side for Blizzard.
     self.Button:ClearAllPoints()
-    self.Button:SetPoint("RIGHT", self.Header, "RIGHT", -inset, offsetY)
+    self.Button:SetPoint("LEFT", self.BackButton, "RIGHT", 8, 0)
     self.Button:Show()
 end
 

@@ -1155,9 +1155,11 @@ and `.lua`, with `Camelot/QuestMapFrameOverrides.lua` and
 
 The frame is `QuestMapFrame`, whose `DetailsFrame` aliases
 `QuestMapFrame.QuestsFrame.DetailsFrame`. `DetailsFrame.BackFrame.BackButton`
-is Blizzard's **Back** control. Out Loud creates a sibling button in `BackFrame`,
-mirrors Back's left inset at the right edge, and uses the same vertical offset
-and button size. The exported Back anchor is `LEFT`, inset 11, offset Y 4.
+is Blizzard's **Back** control in both inspected clients. Out Loud creates a
+sibling button in `BackFrame`, anchors its `LEFT` to Back's `RIGHT` with an
+8-unit gap and zero vertical offset, and uses Back's button size. This follows
+the native Back placement and leaves the right side for the Warband completion
+indicator. The placement change was checked statically only, not in-game.
 Neither the native button nor the quest description scroll child is modified.
 
 Visibility requires the log and description detail viewport to be visible,
