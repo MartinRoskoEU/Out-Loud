@@ -1,12 +1,12 @@
 local AddonName, OutLoud = ...
 
-local QuestLogIntegration = {}
+local QuestLogIntegration = { SettingsSource = "quest" }
 OutLoud.UI.QuestLogIntegration = QuestLogIntegration
 
 function QuestLogIntegration:OnHidden()
     -- Back closes the detail viewport; changing selection in an open view does not.
     if self.Frame:IsVisible() and self.DetailsFrame:IsVisible() then return end
-    OutLoud.Narration:StopSource(self, "quest-log-closed")
+    OutLoud.Narration:CloseSource(self, "quest-log-closed")
 end
 
 function QuestLogIntegration:GetCurrentText()

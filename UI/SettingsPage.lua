@@ -756,7 +756,7 @@ function SettingsPage:CreateReadingSection(anchor)
     self.AutoCloseHeader = closeHeader
     self.AutoCloseCheckboxes, self.AutoCloseDescription = self:CreateSourceCheckboxes(
         closeHeader, "GetAutoClose", "SetAutoClose",
-        "Stops narration and closes Talking Head when the selected source window closes. When disabled, captured narration continues; closed items never turn pages. Quest Log keeps its existing close behavior.")
+        "Stops narration and closes Talking Head when the selected source window closes. Quest includes NPC dialogues and Quest Log narration. When disabled, captured narration continues; closed items never turn pages.")
     self:CreateSpeechRateControl(self.AutoCloseDescription)
     self:CreateTTSSeparatorSoundControl(self.SpeechRateDescription)
 end

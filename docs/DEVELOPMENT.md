@@ -1095,8 +1095,9 @@ but ongoing manual/automatic readings still continue between pages.
 `Narration:CloseSource` always cancels that source's delay. Its Auto Close flag
 controls whether the existing owner-checked `StopSource` is invoked. False leaves
 accepted requests intact, including ones awaiting the previous closing animation.
-Quest Log still uses its original unconditional close path. Explicit STOP and
-Talking Head closure are unchanged, as are presentation animations.
+NPC quest dialogues and Quest Log narration share the `quest` Auto Close flag,
+while retaining distinct request owners. Explicit STOP and Talking Head closure
+are unchanged, as are presentation animations. Quest Log remains manual.
 
 Item Text uses the existing waiting/expected-page state to preserve transient
 hides during both narrated and silent Next/Previous navigation. Silent navigation
@@ -1305,9 +1306,19 @@ It forwards the existing end, playback-start, and text-progress callbacks from
 `TTS:Speak()` to the same Talking Head. New narration replaces ownership before
 TTS cancels the previous session, so a stale callback cannot hide the new speaker.
 Sentence streaming, loading, sentence fades, paged scrolling, and close/cancel
-behavior remain in their existing services. Closing the Quest Log or returning
-Back from its detail viewport stops its owned narration and closes Talking Head.
+behavior remain in their existing services. With Auto Close > Quest enabled,
+closing the Quest Log or returning Back from its detail viewport stops its owned
+narration and closes Talking Head. With it disabled, accepted narration continues,
+including requests awaiting presentation. Late closure from another source cannot
+stop it, and Quest Log closure cannot stop another source's narration.
 Selection changes inside a visible detail viewport preserve accepted snapshots.
+
+`Tests/SourceClosure.lua` passed for both clients with Quest Auto Close on/off,
+active and pending Quest Log requests, Back/detail closure, stale source closes,
+natural completion, manual STOP, and Talking Head close. `Tests/SourceSettings.lua`,
+`Tests/Narration.lua`, `Tests/Clients.lua`, `python Tests/Settings.py`, and Lua 5.1
+compilation of changed Lua files also passed. This is standalone logic/static
+validation only; no in-game testing was performed for this Auto Close change.
 
 The general lifecycle validation does not establish every Quest Log button
 placement/visibility case, player appearance/voice token, or description-only read

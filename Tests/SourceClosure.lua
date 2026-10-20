@@ -205,18 +205,25 @@ Test("Closure cancels a request waiting for an earlier presentation to close", f
 end)
 
 Test("Late closure from any outgoing source preserves every other owner", function(client)
-    for _, outgoing in ipairs({ "Quest", "Gossip", "Item", "Log" }) do
-        for _, incoming in ipairs({ "Quest", "Gossip", "Item", "Log" }) do
-            if outgoing ~= incoming then
-                local test = Harness(client, false)
-                test:Start(outgoing)
-                local request = test:Start(incoming)
-                local hides, stops = #test.hides, #test.stops
-                test.shown[outgoing] = false
-                test.sources[outgoing]:OnHidden()
-                Equal(test.narration.Narration, request)
-                Equal(#test.hides, hides)
-                Equal(#test.stops, stops)
+    for _, enabled in ipairs({ false, true }) do
+        for _, pending in ipairs({ false, true }) do
+            for _, outgoing in ipairs({ "Quest", "Gossip", "Item", "Log" }) do
+                for _, incoming in ipairs({ "Quest", "Gossip", "Item", "Log" }) do
+                    if outgoing ~= incoming then
+                        local test = Harness(client, false)
+                        test.addon.Database:SetAutoClose(test.sources[outgoing].SettingsSource, enabled)
+                        test:Start(outgoing)
+                        if pending then test.head.State = "Closing" end
+                        local request = test:Start(incoming, pending)
+                        local hides, stops = #test.hides, #test.stops
+                        test.shown[outgoing] = false
+                        test.sources[outgoing]:OnHidden()
+                        Equal(test.narration.Narration, request)
+                        Equal(request.ended, nil)
+                        Equal(#test.hides, hides)
+                        Equal(#test.stops, stops)
+                    end
+                end
             end
         end
     end
@@ -267,14 +274,53 @@ Test("Visible source refreshes preserve gossip navigation and quest stage replac
     end
 end)
 
-Test("Quest Log Back/detail closure stops only its request", function(client)
-    local test = Harness(client, false)
-    local request = test:Start("Log")
-    test.sources.Log:OnHidden()
-    Equal(test.narration.Narration, request, "Visible details preserve selection changes")
-    test.details = false
-    test.sources.Log:OnHidden()
-    Equal(test.narration.Narration, nil)
+Test("Quest Log Back/detail closure follows Quest Auto Close", function(client)
+    for _, enabled in ipairs({ false, true }) do
+        local test = Harness(client, false)
+        test.addon.Database:SetAutoClose("quest", enabled)
+        local request = test:Start("Log")
+        local hides, stops = #test.hides, #test.stops
+        test.sources.Log:OnHidden()
+        Equal(test.narration.Narration, request, "Visible details preserve selection changes")
+        test.details = false
+        test.sources.Log:OnHidden()
+        if enabled then
+            Equal(test.narration.Narration, nil)
+            Equal(#test.hides, hides + 1)
+            Equal(test.hides[#test.hides][1], "quest-log-closed")
+        else
+            Equal(test.narration.Narration, request)
+            Equal(#test.hides, hides)
+            Equal(#test.stops, stops)
+        end
+    end
+end)
+
+Test("Retained Quest Log narration preserves completion, manual STOP and Talking Head close", function(client)
+    for _, action in ipairs({ "finished", "manual", "Talking Head close" }) do
+        local test = Harness(client, false)
+        test.addon.Database:SetAutoClose("quest", false)
+        local request = test:Start("Log")
+        local ended = 0
+        request.onRequestEnded = function() ended = ended + 1 end
+        test.shown.Log = false
+        test.sources.Log:OnHidden()
+        local hides = #test.hides
+        if action == "finished" then
+            test.speaks[1][3]("finished")
+        else
+            test.narration:Stop(action == "manual" and "manual" or nil, action)
+        end
+        Equal(test.narration.Narration, nil)
+        Equal(request.ended, true)
+        Equal(ended, 1)
+        Equal(#test.hides, hides + 1)
+        test.narration:OnClosing(test.hides[#test.hides][1])
+        Equal(#test.stops, 2, "Replacement stop plus normal presentation close")
+        test.speaks[1][3]("finished")
+        Equal(ended, 1, "Stale completion cannot end a request twice")
+        Equal(#test.hides, hides + 1)
+    end
 end)
 
 Test("Item page changes retain manual interruption and automatic continuation", function(client)
@@ -388,7 +434,7 @@ Test("Disabling one source cancels only its delay and rejects stale callbacks", 
 end)
 
 Test("Auto Close is independent for each source and retains captured requests when disabled", function(client)
-    for _, key in ipairs({ "Quest", "Gossip", "Item" }) do
+    for _, key in ipairs({ "Quest", "Gossip", "Item", "Log" }) do
         for _, enabled in ipairs({ false, true }) do
             for _, pending in ipairs({ false, true }) do
                 local test = Harness(client, false)

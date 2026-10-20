@@ -27,6 +27,6 @@ OutLoud.Client = {
         point = "TOP",
         offsetY = -60,
         scale = 1,
-        strata = "HIGH",
+        strata = "BACKGROUND",
     },
 }

@@ -94,6 +94,8 @@ for _, name in ipairs({ "Quest", "Gossip", "ItemText" }) do
     local source = Read("UI/" .. name .. "Integration.lua")
     assert(source:find('hooksecurefunc(OutLoud.Database, "SetAutoPlay", function(_, source)\n        self:OnAutoPlayChanged(source)', 1, true))
 end
-assert(not Read("UI/QuestLogIntegration.lua"):find("GetAutoClose", 1, true))
+local log = Read("UI/QuestLogIntegration.lua")
+assert(log:find('SettingsSource = "quest"', 1, true))
+assert(log:find('OutLoud.Narration:CloseSource(self, "quest-log-closed")', 1, true))
 assert(not Read("UI/TalkingHead.lua"):find("GetAutoClose", 1, true))
 print("PASS: per-source settings migration, reloads, partial preferences, client isolation, and static UI/hook contracts")
