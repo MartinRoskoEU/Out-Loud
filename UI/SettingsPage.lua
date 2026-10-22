@@ -138,9 +138,12 @@ function SettingsPage:UpdateScrollLayout()
     if self.TTSSeparatorSoundDescription then
         self.TTSSeparatorSoundDescription:SetWidth(descriptionWidth)
     end
+    if self.TTSVolumeDescription then
+        self.TTSVolumeDescription:SetWidth(descriptionWidth)
+    end
 
-    local lastDescription = self.TTSSeparatorSoundDescription or self.SpeechRateDescription
-        or self.AutoNarrationDelayDescription or self.AutoNarrateDescription
+    local lastDescription = self.TTSVolumeDescription or self.TTSSeparatorSoundDescription
+        or self.SpeechRateDescription or self.AutoNarrationDelayDescription or self.AutoNarrateDescription
     local top, bottom = content:GetTop(), lastDescription:GetBottom()
     if top and bottom then
         content:SetHeight(math.max(1, top - bottom + 24))
@@ -688,6 +691,61 @@ function SettingsPage:CreateTTSSeparatorSoundControl(anchor)
     self.TTSSeparatorSoundDescription = description
 end
 
+function SettingsPage:RefreshTTSVolume()
+    local control = self.TTSVolumeSlider
+    if not control then return end
+    local volume = OutLoud.TTS:GetSpeechVolume()
+    local enabled = volume ~= nil and C_TTSSettings and type(C_TTSSettings.SetSpeechVolume) == "function"
+    self.SyncingTTSVolume = true
+    control:SetValue(volume or 100)
+    self.SyncingTTSVolume = false
+    control:SetEnabled(enabled == true)
+    self.TTSVolumeLabel:SetFontObject(enabled and GameFontNormal or GameFontDisable)
+    self.TTSVolumeDescription:SetFontObject(enabled and GameFontHighlightSmall or GameFontDisableSmall)
+    OutLoud:Debug("TTS volume refresh: native:", tostring(volume), "enabled:", enabled == true)
+end
+
+function SettingsPage:OnTTSVolumeChanged(value)
+    if self.SyncingTTSVolume then return end
+    if C_TTSSettings and type(C_TTSSettings.SetSpeechVolume) == "function"
+        and OutLoud.TTS:GetSpeechVolume() ~= nil then
+        -- WoW owns persistence; only a user slider change writes the native setting.
+        OutLoud:Debug("TTS volume change: requested:", value)
+        C_TTSSettings.SetSpeechVolume(value)
+    end
+    self:RefreshTTSVolume()
+end
+
+function SettingsPage:CreateTTSVolumeControl(anchor)
+    local label = self.Content:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    label:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", -21, -18)
+    label:SetText("TTS Volume")
+
+    local control = CreateFrame("Frame", nil, self.Content, "MinimalSliderWithSteppersTemplate")
+    ---@cast control OutLoudSettingsDelaySlider
+    control:SetWidth(250)
+    control:SetPoint("TOPLEFT", label, "BOTTOMLEFT", 0, -8)
+    control:Init(OutLoud.TTS:GetSpeechVolume() or 100, 0, 100, 100, {
+        [control.Label.Right] = function(value) return string.format("%d%%", value) end,
+    })
+    control:RegisterCallback(control.Event.OnValueChanged, function(_, value)
+        self:OnTTSVolumeChanged(value)
+    end, self)
+    control:HookScript("OnShow", function() self:RefreshTTSVolume() end)
+
+    local description = self.Content:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    description:SetPoint("TOPLEFT", control, "BOTTOMLEFT", 21, -18)
+    description:SetWidth(620)
+    description:SetJustifyH("LEFT")
+    description:SetJustifyV("TOP")
+    description:SetWordWrap(true)
+    description:SetText("Adjusts narration volume. Also changes the World of Warcraft Text-to-Speech volume setting.")
+    self.TTSVolumeSlider = control
+    self.TTSVolumeLabel = label
+    self.TTSVolumeDescription = description
+    self:RefreshTTSVolume()
+end
+
 function SettingsPage:CreateReadingSection(anchor)
     local header = CreateFrame(
         "Frame",
@@ -759,4 +817,5 @@ function SettingsPage:CreateReadingSection(anchor)
         "Stops narration and closes Talking Head when the selected source window closes. Quest includes NPC dialogues and Quest Log narration. When disabled, captured narration continues; closed items never turn pages.")
     self:CreateSpeechRateControl(self.AutoCloseDescription)
     self:CreateTTSSeparatorSoundControl(self.SpeechRateDescription)
+    self:CreateTTSVolumeControl(self.TTSSeparatorSoundDescription)
 end

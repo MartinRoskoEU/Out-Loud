@@ -10,7 +10,8 @@ local function Equal(actual, expected, message)
 end
 
 local function Harness(withoutDiagnostics)
-    local test = { calls = {}, order = {}, diagnostics = {}, stops = 0, settings = 0, frames = 0 }
+    local test = { calls = {}, order = {}, diagnostics = {}, stops = 0, settings = 0, frames = 0,
+        nativeVolume = 100, volumeReads = 0 }
     local environment = setmetatable({}, { __index = _G })
     environment._G = environment
     test.clock = 0
@@ -21,9 +22,14 @@ local function Harness(withoutDiagnostics)
     environment.C_Timer = { After = function() error("Speech must not use timers") end }
     environment.VoiceSelection = nil
     environment.Enum = { TtsBoolSetting = { PlaySoundSeparatingChatLineBreaks = 0 } }
-    environment.C_TTSSettings = { SetSetting = function()
-        test.settings = test.settings + 1
-    end }
+    environment.C_TTSSettings = {
+        SetSetting = function() test.settings = test.settings + 1 end,
+        GetSpeechVolume = function()
+            test.volumeReads = test.volumeReads + 1
+            return test.nativeVolume
+        end,
+        SetSpeechVolume = function() error("Speech must not write the native volume") end,
+    }
     environment.CreateFrame = function()
         test.frames = test.frames + 1
         local frame = { events = {} }
@@ -113,6 +119,63 @@ Test("Streaming submits immediately and stays one sentence ahead", function()
     Equal(test.calls[3].spoken, "Third sentence.")
     test:Bookmark(3, 103)
     Equal(#test.calls, 3)
+end)
+
+Test("Each sentence submission reads native volume without restarting submitted speech", function()
+    local test = Harness()
+    test.nativeVolume = 23
+    Equal(test.tts:Speak(text, 7), true)
+    local session, stops = test.tts.CurrentSession, test.stops
+    Equal(test.calls[1].volume, 23)
+    Equal(test.volumeReads, 1)
+    test.nativeVolume = 0
+    Equal(#test.calls, 1, "A native setting change does not submit or restart speech")
+    test:Bookmark(1, 101)
+    Equal(test.calls[2].volume, 0, "Zero must remain valid")
+    test.nativeVolume = 100
+    test:Bookmark(2, 102)
+    Equal(test.calls[3].volume, 100)
+    Equal(test.calls[1].volume, 23, "Previously submitted parameters remain unchanged")
+    Equal(test.calls[2].volume, 0, "A prefetched submission retains its supplied volume")
+    local report = test.addon.GetTTSReport()
+    for index, volume in ipairs({ 23, 0, 100 }) do
+        local attempt = session.sentenceStates[index].attempts[1]
+        Equal(attempt.volume, volume, "Retain the exact argument supplied to SpeakText")
+        Equal(attempt.volumeSource, "native")
+        assert(report:find("voice=7 rate=0 volume=" .. volume .. " volume-source=native", 1, true))
+    end
+    test:Bookmark(2, 102)
+    Equal(#test.calls, 3, "A duplicate bookmark cannot resubmit")
+    Equal(test.volumeReads, 3, "One native read per actual submission")
+    Equal(test.tts.CurrentSession, session)
+    Equal(test.stops, stops, "Volume changes issue no STOP")
+    Equal(test.settings, 0)
+end)
+
+Test("Unavailable or invalid native volume preserves the previous submission fallback", function()
+    for _, configure in ipairs({
+        function(test) test.environment.C_TTSSettings = nil end,
+        function(test) test.environment.C_TTSSettings.GetSpeechVolume = nil end,
+        function(test) test.environment.C_TTSSettings.GetSpeechVolume = true end,
+        function(test) test.nativeVolume = nil end,
+        function(test) test.nativeVolume = "45" end,
+        function(test) test.nativeVolume = -1 end,
+        function(test) test.nativeVolume = 101 end,
+        function(test) test.nativeVolume = 0 / 0 end,
+        function(test) test.nativeVolume = math.huge end,
+    }) do
+        local test = Harness()
+        configure(test)
+        Equal(test.tts:GetSpeechVolume(), nil)
+        Equal(test.tts:Speak("Supplied sentence.", 7), true)
+        Equal(test.calls[1].volume, 100)
+        Equal(test.tts.CurrentSession.sentenceStates[1].attempts[1].volumeSource, "fallback")
+    end
+    local test = Harness()
+    test.nativeVolume = 37
+    test.environment.C_TTSSettings.SetSpeechVolume = nil
+    Equal(test.tts:Speak("Getter remains usable.", 7), true)
+    Equal(test.calls[1].volume, 37, "A setter is unnecessary for playback")
 end)
 
 Test("Tested splitter preserves punctuation and normalizes whitespace", function()

@@ -33,12 +33,13 @@ local function AddSentence(lines, sentence)
         end
         table.sort(native)
         lines[#lines + 1] = string.format(
-            "  s=%s chunk=%s attempt=%s logical=%s cancelled=%s submit=%s at=%.3f bookmark-at=%s native=%s unresolved=%s utterances=[%s] stops=%s last-stop=%s/%s at=%s recovery=%s",
+            "  s=%s chunk=%s attempt=%s logical=%s cancelled=%s submit=%s at=%.3f bookmark-at=%s native=%s unresolved=%s utterances=[%s] stops=%s last-stop=%s/%s at=%s recovery=%s voice=%s rate=%s volume=%s volume-source=%s",
             Value(sentence.sessionID), Value(sentence.index), Value(attempt.id), sentence.state,
             Value(sentence.logicalCancelled == true), attempt.submissionState, attempt.submittedAt,
             Value(attempt.firstBookmarkAt), attempt.nativeState,
             Value(attempt.unresolved), table.concat(native, ","), Value(attempt.stopCount),
-            Value(attempt.lastStopID), Value(attempt.lastStopResult), Value(attempt.lastStopAt), Value(attempt.recoveryReason))
+            Value(attempt.lastStopID), Value(attempt.lastStopResult), Value(attempt.lastStopAt), Value(attempt.recoveryReason),
+            Value(attempt.voiceID), Value(attempt.rate), Value(attempt.volume), Value(attempt.volumeSource))
     end
 end
 

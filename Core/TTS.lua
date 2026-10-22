@@ -202,6 +202,18 @@ function TTS:RefreshVoices()
     return self.Voices
 end
 
+function TTS:GetSpeechVolume()
+    -- Nil marks unavailable/invalid native settings; playback keeps its old fallback.
+    if not C_TTSSettings or type(C_TTSSettings.GetSpeechVolume) ~= "function" then
+        return nil
+    end
+    local volume = C_TTSSettings.GetSpeechVolume()
+    if type(volume) ~= "number" or not (volume >= 0 and volume <= 100) then
+        return nil
+    end
+    return volume
+end
+
 local function ValidInput(text, voiceID)
     if type(text) ~= "string" or not text:find("%S") then
         return false, "invalid-text"
@@ -449,10 +461,12 @@ function TTS:SubmitText(session, text, chunk)
     if self.CurrentSession ~= session or session.state ~= "active" then return false end
     local sentence = session.sentenceStates[chunk]
     if not sentence or sentence.state ~= "planned" then return false end
+    local nativeVolume = self:GetSpeechVolume()
     local attempt = {
         sessionID = session.id, sentenceIndex = chunk, id = #sentence.attempts + 1,
         bookmark = mark, submissionState = "calling", submittedAt = Now(),
         voiceID = session.voiceID, rate = OutLoud.Database:GetSpeechRate(),
+        volume = nativeVolume or 100, volumeSource = nativeVolume ~= nil and "native" or "fallback",
         utterances = {}, utteranceCount = 0, stopCount = 0,
         nativeState = "waiting-unconfirmed", unresolved = true,
     }
@@ -461,15 +475,17 @@ function TTS:SubmitText(session, text, chunk)
     SetSentenceState(sentence, "submitted")
     -- Compatibility views only; Split decisions use the lifecycle records.
     session.queued[chunk] = true
-    local rate = attempt.rate
-    Record("submission", session.id, token, attempt.id, nil, "rate=" .. rate)
-    OutLoud:Debug("TTS SpeakText call: session:", session.id, "chunk:", token, "bytes:", #text)
+    local rate, volume = attempt.rate, attempt.volume
+    Record("submission", session.id, token, attempt.id, nil,
+        "voice=" .. session.voiceID .. " rate=" .. rate .. " volume=" .. volume .. " volume-source=" .. attempt.volumeSource)
+    OutLoud:Debug("TTS SpeakText call: session:", session.id, "chunk:", token, "bytes:", #text,
+        "voice:", session.voiceID, "rate:", rate, "volume:", volume, "volume-source:", attempt.volumeSource)
     local ok, message = pcall(
         C_VoiceChat.SpeakText,
         session.voiceID,
         '<bookmark mark="' .. mark .. '"/>' .. EscapeSpeechText(text),
         rate,
-        100,
+        volume,
         false
     )
 

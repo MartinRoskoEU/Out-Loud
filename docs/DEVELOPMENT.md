@@ -422,8 +422,11 @@ prefetches one sentence ahead. A display callback cannot alter the generation te
 Speak methods return `true` when submission succeeds, or `false` plus a reason:
 `invalid-text`, `invalid-voice`, `no-sentences`, or `speech-failed`. A supplied
 voice ID must be a nonnegative integer; `0` is valid. Rate comes from
-`Database:GetSpeechRate()` on each request (default `0`), volume is `100`, and
-overlap is `false`. Initialization creates the event frame once without changing
+`Database:GetSpeechRate()` on each request (default `0`), volume comes from
+`TTS:GetSpeechVolume()` on each submission, and overlap is `false`. The volume
+helper reads `C_TTSSettings.GetSpeechVolume()` directly; a missing getter or an
+invalid native value retains the previous `100` submission fallback.
+Initialization creates the event frame once without changing
 WoW's global TTS settings.
 
 ## Sessions, cancellation, and known limitations
@@ -1138,7 +1141,7 @@ step; invalid values use the default. Valid existing values are preserved.
 
 The Settings page shows **Auto Play** with Quest, Gossip and Item Text
 checkboxes, the shared **Auto Play Delay**, then **Auto Close** with the same
-three checkboxes. Speech Rate and TTS Separator Sound follow. There is no
+three checkboxes. Speech Rate, TTS Separator Sound and TTS Volume follow. There is no
 reading-mode selector. A shared checkbox helper reuses the existing artwork,
 label hit area and hover behavior for all these controls. The helper uses
 `SettingsCheckboxTemplate`, `SettingsCheckboxMixin:Init()`, and its
@@ -1163,6 +1166,41 @@ Targeted static checks: `python Tests/Settings.py`. These inspect source wiring,
 both TOCs, and scroll layout without constructing frames or calling WoW APIs.
 Lua 5.1 compilation also passed for changed Lua files. No in-game testing was
 performed for this control; native rendering and sound behavior remain unverified.
+
+**TTS Volume** follows TTS Separator Sound in the shared Forever/Retail Settings
+page. It uses `MinimalSliderWithSteppersTemplate` with 100 steps across 0-100,
+displays an integer percentage, and includes its description in scroll sizing.
+Creation and `OnShow` read the native setting. Programmatic refresh callbacks are
+guarded against writes; only a user change calls `C_TTSSettings.SetSpeechVolume()`,
+then refreshes from native readback. There is no addon SavedVariable, startup
+override, reset button, or migration. Native changes made elsewhere appear when
+the control is next shown; no continuous settings-change listener is installed.
+The description explicitly identifies that changing volume also changes WoW's
+Text-to-Speech volume setting.
+
+The slider is disabled when either native volume accessor is unavailable or the
+getter returns a nonnumeric, nonfinite, or out-of-range value. Playback still uses
+a valid getter value when only the setter is missing. If no valid native value is
+available, playback retains the previous volume of 100 without writing it back.
+Each sentence reads volume immediately before submission; changing volume does
+not restart or stop narration, and already submitted parameters remain unchanged.
+Native effects on playing or prefetched speech require in-game verification.
+Existing opt-in debug logging includes requested slider values, native readback,
+and each `SpeakText` submission's voice ID, rate, volume and native/fallback source.
+Current and retired attempt snapshots retain the same submitted parameters, even
+when debug event recording is disabled. These values identify the addon-to-native
+API boundary; they do not prove the selected voice engine applied audible gain.
+
+Focused checks: `python Tests/Settings.py`, `lua Tests/SettingsVolume.lua`, and
+`lua Tests/TTS.lua` (standalone Lua 5.1, or `lupa.lua51.LuaRuntime` when no Lua
+executable is available). Static checks cover both TOCs, native slider wiring,
+description/layout integration, and setter ownership. Logic checks exercise
+production refresh/change callbacks with supplied value/enabled receivers and
+native-setting inputs; they construct no frames. Controller checks cover fresh
+per-sentence volume reads, 0/100 endpoints, unavailable/invalid values, and the
+absence of resubmission or STOP during a volume change. These are standalone
+checks only; native rendering, widget interaction, persistence and audible volume
+remain unverified in both clients.
 
 Below the Auto Play checkboxes, **Auto Play Delay** uses `MinimalSliderWithSteppersTemplate`
 from `Blizzard_SharedXML/Shared/Slider/MinimalSlider.xml` and `.lua`, the same
