@@ -1,5 +1,6 @@
 ## Interface: 120105
 ## Title: Out Loud
+## IconTexture: Interface\AddOns\OutLoud\assets\OutLoud-64.png
 ## Notes: Text-to-speech addon for World of Warcraft: Retail
 ## Author: Nendis
 ## Version: 0.1.0

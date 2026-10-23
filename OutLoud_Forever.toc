@@ -1,5 +1,6 @@
 ## Interface: 16001
 ## Title: Out Loud
+## IconTexture: Interface\AddOns\OutLoud\assets\OutLoud-64.png
 ## Notes: Text-to-speech addon for World of Warcraft: Forever
 ## Author: Nendis
 ## Version: 0.1.0

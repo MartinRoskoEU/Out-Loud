@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import re
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("outloud_package", ROOT / "tools/package.py")
@@ -90,6 +91,8 @@ class ReleaseChecks(unittest.TestCase):
             self.assertEqual(metadata["Notes"],
                              f"Text-to-speech addon for World of Warcraft: {client}")
             self.assertEqual(metadata["LoadSavedVariablesFirst"], "1")
+            self.assertEqual(metadata["IconTexture"],
+                             r"Interface\AddOns\OutLoud\assets\OutLoud-64.png")
             self.assertTrue(all((ROOT / path).is_file() for path in files))
             self.assertEqual([path for path in files if path.startswith("Clients/")],
                              [f"Clients/{client}/Config.lua", f"Clients/{client}/VoiceMappings.lua"])
@@ -123,6 +126,9 @@ class ReleaseChecks(unittest.TestCase):
                 self.assertIn(f"OutLoud/Clients/{client}/Config.lua", entries)
                 self.assertIn("OutLoud/Core/TTSDiagnostics.lua", entries)
                 self.assertIn("OutLoud/UI/TalkingHead.xml", entries)
+                icon_path = "OutLoud/assets/OutLoud-64.png"
+                icon_bytes = (ROOT / "assets/OutLoud-64.png").read_bytes()
+                self.assertEqual(entries[icon_path], icon_bytes)
                 self.assertFalse(any("Tests/" in p or "DevResources/" in p or "tools/" in p for p in entries))
                 other = "Retail" if client == "Forever" else "Forever"
                 self.assertFalse(any(p.startswith(f"OutLoud/Clients/{other}/") for p in entries))
@@ -130,6 +136,8 @@ class ReleaseChecks(unittest.TestCase):
                     archive = package.build(client, Path(temporary))
                     self.assertEqual(archive.name, f"OutLoud-{client}-{metadata['Version']}.zip")
                     self.assertEqual(archive.read_bytes(), first)
+                    with zipfile.ZipFile(archive) as contents:
+                        self.assertEqual(contents.read(icon_path), icon_bytes)
                     manifest = json.loads(archive.with_suffix(".manifest.json").read_text())
                     self.assertEqual(manifest["toc"], package.TOCS[client])
                     self.assertEqual(manifest["version"], metadata["Version"])
@@ -189,6 +197,8 @@ class ReleaseChecks(unittest.TestCase):
                 package.validate_toc(client, metadata, files + ["Clients/Other/Config.lua"])
             with self.assertRaises(ValueError):
                 package.validate_toc(client, metadata, [p for p in files if "TTSDiagnostics" not in p])
+            with self.assertRaisesRegex(ValueError, "IconTexture"):
+                package.validate_toc(client, {**metadata, "IconTexture": "missing.png"}, files)
         for path in ("../private", "C:/private", "/private"):
             with self.assertRaises(ValueError):
                 package.safe_path(path)

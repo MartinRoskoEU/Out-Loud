@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # These root TOCs serve both junction-based development and release packages.
 # Use explicit client suffixes; there is no unsuffixed fallback TOC.
 TOCS = {"Forever": "OutLoud_Forever.toc", "Retail": "OutLoud_Mainline.toc"}
+ICON_PATH = "assets/OutLoud-64.png"
 SAVED_VARIABLES = {"Forever": "OutLoudDB", "Retail": "OutLoudRetailDB"}
 # Display classifications verified on CurseForge, not guessed API flavor IDs.
 CLASSIFICATION = {
@@ -27,10 +28,12 @@ CLASSIFICATION = {
 }
 
 
-def read_source(root, path):
-    """Normalize text line endings so Windows and Unix checkouts package alike."""
+def read_source(root, path, *, binary=False):
+    """Preserve binary assets; normalize text line endings across checkouts."""
     source = (root / path).resolve()
     source.relative_to(root.resolve())  # Reject source symlinks outside the repository.
+    if binary:
+        return source.read_bytes()
     return source.read_text(encoding="utf-8-sig").replace("\r\n", "\n").encode("utf-8")
 
 
@@ -68,6 +71,8 @@ def validate_toc(client, metadata, files):
         raise ValueError(f"TOC Interface must match the documented {client} game version")
     if metadata.get("Title") != "Out Loud":
         raise ValueError("Addon identity must remain Out Loud")
+    if metadata.get("IconTexture") != "Interface\\AddOns\\OutLoud\\" + ICON_PATH.replace("/", "\\"):
+        raise ValueError("TOC IconTexture must match the packaged icon")
     required = [
         "Core/Namespace.lua", f"Clients/{client}/Config.lua", "Core/Client.lua",
         f"Clients/{client}/VoiceMappings.lua", "Core/NPCInspection.lua",
@@ -87,6 +92,7 @@ def package_files(client, root=ROOT):
     metadata, files = parse_toc(toc_bytes.decode("utf-8"))
     validate_toc(client, metadata, files)
     entries = {PurePosixPath(toc).name: toc_bytes, "README.md": read_source(root, "README.md")}
+    entries[ICON_PATH] = read_source(root, ICON_PATH, binary=True)
 
     def include(path):
         if path in entries:

@@ -48,13 +48,16 @@ python tools/package.py --client Retail
 The default command produces `dist/OutLoud-Forever-0.1.0.zip` and
 `dist/OutLoud-Retail-0.1.0.zip`, plus a `.manifest.json` beside each ZIP. Every archive
 contains only the `OutLoud/` directory with its selected TOC, required client files,
-shared runtime/UI resources, diagnostics, and README. Tests, development reference
+shared runtime/UI resources, diagnostics, README, and `assets/OutLoud-64.png`.
+Both TOCs reference this icon through `IconTexture`. Tests, development reference
 exports, tools, Git files, and the other client's files are excluded. File selection
-is an explicit TOC allowlist, with recursive XML Script/Include dependency handling.
+is an explicit TOC allowlist, with recursive XML Script/Include dependency handling
+and an explicit binary icon entry.
 
 The offline build validates metadata, client/settings agreement, exact load order,
 required file existence, XML parsing, ZIP integrity, and installed bytes. Archives
-use sorted names, UTF-8 text with LF line endings, fixed timestamps and permissions,
+use sorted names, UTF-8 text with LF line endings, unchanged binary asset bytes,
+fixed timestamps and permissions,
 and stored ZIP entries to avoid zlib-version differences. The same source produces
 identical ZIP bytes; the build serializes twice and compares. Each external manifest
 records archive/file SHA-256 hashes, version, proposed tag, TOC, and classification.
