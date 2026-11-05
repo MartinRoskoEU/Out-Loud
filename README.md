@@ -147,7 +147,7 @@ requests without restarting current playback.
 
 ## Project Status
 
-Both client builds start at version 0.1.0 and are independently versioned. Retail
+Both client builds are at version 0.1.1 and are independently versioned. Retail
 integration has been checked against Blizzard UI source for 12.1.5; it still
 requires manual in-game verification. Forever retains its existing Talking Head
 appearance and placement. Retail uses the same verified native graphical assets

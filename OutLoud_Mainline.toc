@@ -3,7 +3,7 @@
 ## IconTexture: Interface\AddOns\OutLoud\assets\OutLoud-64.png
 ## Notes: Text-to-speech addon for World of Warcraft: Retail
 ## Author: Nendis
-## Version: 0.1.0
+## Version: 0.1.1
 ## SavedVariables: OutLoudRetailDB
 ## SavedVariablesPerCharacter: OutLoudRetailCharacterDB
 ## LoadSavedVariablesFirst: 1

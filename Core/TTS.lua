@@ -314,6 +314,78 @@ function TTS:SplitSentences(text)
     return sentences
 end
 
+-- Count UTF-8 leading bytes, without depending on a client-specific UTF-8 API.
+local function CharacterCount(text)
+    local _, count = text:gsub("[^\128-\191]", "")
+    return count
+end
+
+function TTS:BuildSpeechChunks(text)
+    local chunks, pending, pendingLength = {}, nil, 0
+    local function Flush()
+        if pending then chunks[#chunks + 1] = pending end
+        pending, pendingLength = nil, 0
+    end
+    local function AppendParagraph(paragraph)
+        local sentences, units = self:SplitSentences(paragraph), {}
+        local index = 1
+        while index <= #sentences do
+            local sentence = sentences[index]
+            local length = CharacterCount(sentence)
+            local protected = sentence:find("%b<>") ~= nil
+            local normal = length <= 120
+            -- Resolve very short units forward before normal packing can attach
+            -- them backward. A stage direction is a barrier in either direction.
+            while not protected and length <= 15 and sentences[index + 1]
+                and not sentences[index + 1]:find("%b<>") do
+                index = index + 1
+                local following = sentences[index]
+                local followingLength = CharacterCount(following)
+                sentence = sentence .. " " .. following
+                length = length + 1 + followingLength
+                normal = normal and followingLength <= 120
+            end
+            local previous = units[#units]
+            if not protected and length <= 15 and previous and not previous.protected then
+                previous.text = previous.text .. " " .. sentence
+                previous.length = previous.length + 1 + length
+            else
+                units[#units + 1] = { text = sentence, length = length,
+                    protected = protected, normal = normal }
+            end
+            index = index + 1
+        end
+        for _, unit in ipairs(units) do
+            local sentence, length = unit.text, unit.length
+            if not unit.normal or unit.protected then
+                Flush()
+                chunks[#chunks + 1] = sentence
+            else
+                if pending and pendingLength + 1 + length > 300 then Flush() end
+                pending = pending and (pending .. " " .. sentence) or sentence
+                pendingLength = pendingLength > 0 and (pendingLength + 1 + length) or length
+            end
+        end
+        Flush()
+    end
+
+    -- Preserve explicit line breaks before the low-level splitter flattens whitespace.
+    -- A complete bracketed passage stays atomic even when it contains line breaks.
+    local position = 1
+    local bracketStart, bracketEnd = text:find("%b<>")
+    for boundary in text:gmatch("()[\r\n]") do
+        while bracketEnd and bracketEnd < boundary do
+            bracketStart, bracketEnd = text:find("%b<>", bracketEnd + 1)
+        end
+        if not bracketStart or boundary < bracketStart then
+            AppendParagraph(text:sub(position, boundary - 1))
+            position = boundary + 1
+        end
+    end
+    AppendParagraph(text:sub(position))
+    return chunks
+end
+
 function TTS:SanitizeSpeechText(text)
     -- XML 1.0 forbids these ASCII controls, including NUL. UTF-8 bytes stay intact.
     return (text:gsub("[%z\1-\8\11\12\14-\31]", " ")
@@ -547,7 +619,7 @@ function TTS:SpeakStreaming(text, voiceID, onSessionEnded, onPlaybackStarted, on
         return false, reason
     end
 
-    local sentences = self:SplitSentences(text)
+    local sentences = self:BuildSpeechChunks(text)
 
     if #sentences == 0 then
         return false, "no-sentences"

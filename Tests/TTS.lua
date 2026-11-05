@@ -98,7 +98,131 @@ local function Test(name, callback)
     passed = passed + 1
 end
 
-local text = "First sentence. Second sentence. Third sentence."
+-- Explicit boundaries keep lifecycle fixtures as three independent chunks.
+local text = "First sentence.\nSecond sentence.\nThird sentence."
+
+Test("Short chunks retain punctuation and enforce both character limits", function()
+    local tts = Harness().tts
+    Equal(tts:BuildSpeechChunks("Oh? A letter? Wonderful news!")[1], "Oh? A letter? Wonderful news!")
+    local first = string.rep("a", 119) .. "."
+    local second = string.rep("b", 119) .. "!"
+    local third = string.rep("c", 57) .. "."
+    local tail = "Another complete sentence."
+    local chunks = tts:BuildSpeechChunks(first .. " " .. second .. " " .. third .. " " .. tail)
+    Equal(#chunks, 2)
+    Equal(#chunks[1], 300, "The preferred combined length is inclusive")
+    Equal(chunks[2], tail)
+    chunks = tts:BuildSpeechChunks(first .. " " .. second .. " " .. string.rep("c", 58) .. "!")
+    Equal(#chunks, 2, "Normal merging cannot exceed 300 characters")
+    local long = string.rep("x", 120) .. "."
+    chunks = tts:BuildSpeechChunks(tail .. " " .. long .. " " .. tail)
+    Equal(#chunks, 3, "A 121-character sentence blocks normal merging on both sides")
+    Equal(chunks[2], long)
+    local huge = string.rep("word ", 1000) .. "end."
+    Equal(tts:BuildSpeechChunks(huge)[1], huge, "Long sentences are not split or truncated")
+end)
+
+Test("Chunking respects lines, UTF-8 lengths, and atomic bracketed passages", function()
+    local tts = Harness().tts
+    local chunks = tts:BuildSpeechChunks("Oh? Yes!\r\n\r\nNext? Sure!\rLast.\nEnd.")
+    Equal(#chunks, 4)
+    Equal(chunks[1], "Oh? Yes!")
+    Equal(chunks[2], "Next? Sure!")
+    Equal(chunks[3], "Last.")
+    Equal(chunks[4], "End.")
+    local first = string.rep("界", 119) .. "."
+    local second = string.rep("é", 119) .. "!"
+    local third = string.rep("界", 57) .. "."
+    chunks = tts:BuildSpeechChunks(first .. " " .. second .. " " .. third)
+    Equal(#chunks, 1, "300 UTF-8 characters merge despite exceeding 300 bytes")
+    Equal(chunks[1], first .. " " .. second .. " " .. third)
+    Equal(#tts:BuildSpeechChunks(first .. " " .. string.rep("界", 120) .. "!"), 2)
+    for _, passage in ipairs({ "<He stops!>", "<He looks.\nThen waits?>", "<He gestures <here.> Wait!>" }) do
+        chunks = tts:BuildSpeechChunks("Oh? " .. passage .. " Yes! Sure.")
+        Equal(#chunks, 3)
+        Equal(chunks[2], tts:SplitSentences(passage)[1])
+        Equal(chunks[3], "Yes! Sure.")
+    end
+    Equal(tts:BuildSpeechChunks("Use <gate> now. Next!")[1], "Use <gate> now.")
+    Equal(tts:BuildSpeechChunks("<Unclosed. Next!")[1], "<Unclosed. Next!")
+end)
+
+Test("Very short sentences prefer following speech and fall back before barriers", function()
+    local tts = Harness().tts
+    local long = string.rep("x", 179) .. "."
+    local huge = string.rep("y", 310) .. "!"
+    for _, following in ipairs({ long, huge }) do
+        local chunks = tts:BuildSpeechChunks("Yes. " .. following)
+        Equal(#chunks, 1)
+        Equal(chunks[1], "Yes. " .. following, "Forward merging permits long sentences and chunks")
+        chunks = tts:BuildSpeechChunks(following .. " Indeed.")
+        Equal(#chunks, 1)
+        Equal(chunks[1], following .. " Indeed.", "Trailing short speech attaches backward")
+    end
+    local chunks = tts:BuildSpeechChunks(long .. " What? " .. huge)
+    Equal(#chunks, 2)
+    Equal(chunks[1], long)
+    Equal(chunks[2], "What? " .. huge, "Following speech takes precedence over previous speech")
+    Equal(tts:BuildSpeechChunks("What? Are you absolutely certain about that?")[1],
+        "What? Are you absolutely certain about that?")
+    local fifteen = string.rep("界", 14) .. "."
+    Equal(#tts:BuildSpeechChunks(fifteen .. " " .. huge), 1, "15 UTF-8 characters qualify")
+    Equal(#tts:BuildSpeechChunks(string.rep("界", 15) .. ". " .. huge), 2, "16 characters do not qualify")
+    chunks = tts:BuildSpeechChunks(long .. " Indeed. <He stops!> Yes.\n" .. huge)
+    Equal(#chunks, 4)
+    Equal(chunks[1], long .. " Indeed.")
+    Equal(chunks[2], "<He stops!>")
+    Equal(chunks[3], "Yes.", "A protected passage and line break prevent attachment")
+    Equal(chunks[4], huge)
+    chunks = tts:BuildSpeechChunks("Yes. No. Oh. " .. huge)
+    Equal(#chunks, 1, "A very short run does not remain isolated beside long speech")
+    Equal(chunks[1], "Yes. No. Oh. " .. huge)
+end)
+
+Test("Merged chunks share display indexes and prefetch only one chunk ahead", function()
+    local test = Harness()
+    local original = "Oh? A letter? Wonderful news!\nNext? Yes!\nDone."
+    local expected = test.tts:BuildSpeechChunks(original)
+    local updates, ended = {}, 0
+    Equal(test.tts:Speak(original, 7, function(reason)
+        Equal(reason, "finished")
+        ended = ended + 1
+    end, nil, function(displayed, index) updates[index] = displayed end), true)
+    Equal(#test.calls, 1)
+    for index = 1, 3 do
+        Equal(#test.calls, index)
+        Equal(test.calls[index].spoken, expected[index])
+        Equal(test.calls[index].mark, "OUTLOUD:SPEECH:1:" .. index)
+        test:Bookmark(index, 100 + index)
+        Equal(updates[index], expected[index])
+        Equal(#test.calls, math.min(index + 1, 3))
+        test:Bookmark(index, 100 + index)
+        Equal(#test.calls, math.min(index + 1, 3), "Duplicate ownership cannot resubmit")
+        test:Event("FINISHED", 100 + index)
+    end
+    Equal(ended, 1)
+    Equal(test.tts.CurrentSession, nil)
+end)
+
+Test("Merged narration cancellation invalidates prefetched chunks and display ownership", function()
+    local test = Harness()
+    local updates = 0
+    test.tts:Speak("Oh? Yes!\nNext? Sure!\nLast. End.", 7, nil, nil,
+        function() updates = updates + 1 end)
+    local old = test.tts.CurrentSession
+    test:Bookmark(1, 101)
+    Equal(#test.calls, 2)
+    test.tts:Stop()
+    Equal(old.state, "cancelled")
+    Equal(old.sentenceStates[2].state, "cancelled")
+    test.tts:Speak("Replacement? Yes!", 8)
+    local current = test.tts.CurrentSession
+    test:Bookmark(2, 102)
+    Equal(test.tts.CurrentSession, current)
+    Equal(updates, 1, "Cancelled merged text cannot reclaim the display")
+    Equal(#test.calls, 3, "Cancelled bookmarks cannot submit the old final chunk")
+    Equal(test.tts:SubmitChunk(old, 3), false)
+end)
 
 Test("Streaming submits immediately and stays one sentence ahead", function()
     local test = Harness()
@@ -180,7 +304,7 @@ end)
 
 Test("Tested splitter preserves punctuation and normalizes whitespace", function()
     local test = Harness()
-    test.tts:SpeakStreaming("  Hello!\n How\tare you? I am fine.  ", 7)
+    test.tts:SpeakStreaming("  Hello!\n How\tare you?\n I am fine.  ", 7)
     test:Bookmark(1, 101)
     test:Bookmark(2, 102)
     Equal(#test.calls, 3)
@@ -242,7 +366,7 @@ Test("Long bracketed passages stay lossless and use the same display and speech 
     }) do
         local test = Harness()
         local updates = {}
-        Equal(test.tts:Speak(passage .. " Following sentence. Last one!", 7, nil, nil,
+        Equal(test.tts:Speak(passage .. " Following sentence.\nLast one!", 7, nil, nil,
             function(displayed, chunk) updates[#updates + 1] = { displayed, chunk } end), true)
         local session = test.tts.CurrentSession
         Equal(#session.sentences, 3)
@@ -350,7 +474,7 @@ Test("Late bookmarks remain recognizable after Stop and cleanup", function()
     for _, method in ipairs({ "SpeakStreaming", "Speak" }) do
         local test = Harness()
         local ended = 0
-        test.tts[method](test.tts, text .. " Fourth sentence.", 7, function(reason)
+        test.tts[method](test.tts, text .. "\nFourth sentence.", 7, function(reason)
             Equal(reason, "cancelled")
             ended = ended + 1
         end)
@@ -378,7 +502,7 @@ end)
 
 Test("Cancelled bookmark protection validates submitted tokens and the most recent cancellation", function()
     local test = Harness()
-    test.tts:SpeakStreaming(text .. " Fourth sentence.", 7)
+    test.tts:SpeakStreaming(text .. "\nFourth sentence.", 7)
     local cancelled = test.tts.CurrentSession
     test:Bookmark(1, 101)
     test:Bookmark(2, 102)
@@ -436,7 +560,7 @@ Test("Cancelled-session summaries are bounded and do not retain speech or event 
 
     -- Stress only the summary bound using the real submission method, not native timing.
     local many = Harness()
-    many.tts:SpeakStreaming(string.rep("Sentence. ", 256), 7)
+    many.tts:SpeakStreaming(string.rep("Sentence.\n", 256), 7)
     local session = many.tts.CurrentSession
     for chunk = 2, 256 do many.tts:SubmitChunk(session, chunk) end
     many.tts:Stop()
@@ -446,7 +570,7 @@ Test("Cancelled-session summaries are bounded and do not retain speech or event 
     Equal(many.tts.CancelledSession.sentences, nil)
 
     local identified = Harness()
-    identified.tts:SpeakStreaming(string.rep("Sentence. ", 129), 7)
+    identified.tts:SpeakStreaming(string.rep("Sentence.\n", 129), 7)
     for call = 1, 128 do identified:Bookmark(call, 100 + call) end
     identified.tts:Stop()
     Equal(identified.tts.CancelledSession.pendingTokens[129], true,
@@ -557,7 +681,7 @@ Test("UI shutdown stops active narration through both speech entry points and le
     for _, method in ipairs({ "SpeakStreaming", "Speak" }) do
         local test = Harness()
         local ended = 0
-        test.tts[method](test.tts, "First. Second.", 7, function(reason)
+        test.tts[method](test.tts, "First.\nSecond.", 7, function(reason)
             Equal(reason, "cancelled", "UI shutdown cancels the session")
             ended = ended + 1
         end)
@@ -645,9 +769,9 @@ Test("Speech entry points replace only the unwanted separators and preserve lang
         local test = Harness()
         Equal(test.tts:SanitizeSpeechText(original), spoken)
         Equal(test.tts[method](test.tts, original, 7), true)
-        local sentences = test.tts:SplitSentences(spoken)
+        local sentences = test.tts:BuildSpeechChunks(original)
         for index, sentence in ipairs(sentences) do
-            Equal(test.calls[index].spoken, sentence)
+            Equal(test.calls[index].spoken, test.tts:SanitizeSpeechText(sentence))
             Equal(test.calls[index].mark, "OUTLOUD:SPEECH:1:" .. index)
             test:Bookmark(index, 100 + index)
         end
@@ -672,7 +796,7 @@ end)
 
 Test("Sanitized streaming preserves original sentences, indexes, and one-ahead progression", function()
     local test = Harness()
-    local original = "Go to Andorhal / Chillwind Camp. Don't_re-enter! Café~now? / \\ | _ ~"
+    local original = "Go to Andorhal / Chillwind Camp.\nDon't_re-enter!\nCafé~now?\n/ \\ | _ ~"
     local updates, ended = {}, 0
     test.tts:SpeakStreaming(original, 7, function(reason)
         Equal(reason, "finished")
@@ -1372,7 +1496,7 @@ Test("Rapid switches correlate older cancellations without affecting the latest 
     local test = Harness()
     local ids = {}
     for index = 1, 6 do
-        test.tts:SpeakStreaming("First. Second.", 7)
+        test.tts:SpeakStreaming("First.\nSecond.", 7)
         ids[index] = test.tts.CurrentSession.id
         test:Bookmark(#test.calls, 100 + index)
     end
@@ -1428,7 +1552,7 @@ end)
 
 Test("Split history is compact and bounded while all outgoing attempts record stop exposure", function()
     local test = Harness()
-    test.tts:SpeakStreaming(string.rep("Private quest text. ", 256), 7)
+    test.tts:SpeakStreaming(string.rep("Private quest text.\n", 256), 7)
     local outgoing = test.tts.CurrentSession
     for index = 2, 256 do test.tts:SubmitChunk(outgoing, index) end
     test.tts:Stop()

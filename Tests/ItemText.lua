@@ -392,10 +392,19 @@ Test("Markup becomes readable text without changing the original page snapshot",
     local test = Harness(false)
     test.text = '<HTML><BODY><H1>Title</H1><P>A &amp; B.<BR/>Next &quot;line&quot;.</P></BODY></HTML>'
     test.integration:OnReady()
-    Equal(test.integration.ReadyPage.text, 'Title A & B. Next "line".')
+    Equal(test.integration.ReadyPage.text, 'Title\nA & B.\nNext "line".')
     Equal(test.integration.ReadyPage.rawText, test.text)
     test.integration:SpeakCurrentText()
-    Equal(test.calls[1][2], 'Title A & B. Next "line".')
+    Equal(test.calls[1][2], 'Title\nA & B.\nNext "line".')
+end)
+
+Test("Paragraph and explicit line boundaries survive HTML normalization", function()
+    local integration = Harness(false).integration
+    Equal(integration:NormalizeText('<P>Oh? Yes!</P><p>Next? Sure!</p>'), "Oh? Yes!\nNext? Sure!")
+    Equal(integration:NormalizeText('<P>Oh?<BR />Yes!<br>Next.</P>'), "Oh?\nYes!\nNext.")
+    Equal(integration:NormalizeText(" Oh?\r\n Yes!\rNext.\n End. "), "Oh?\nYes!\nNext.\nEnd.")
+    Equal(integration:NormalizeText('<P>A <B>short</B> sentence &amp; more.</P>'), "A short sentence & more.")
+    Equal(integration:NormalizeText('<P>&lt;He stops!&gt;</P><P>Next?</P>'), "<He stops!>\nNext?")
 end)
 
 print("PASS: " .. passed .. " isolated item narration checks; native ItemText/UI/audio unverified")

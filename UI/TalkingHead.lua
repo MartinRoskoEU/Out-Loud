@@ -302,7 +302,7 @@ end
 
 function TalkingHead:PrepareText(text)
     self.DisplayChunk = 1
-    self:SetDisplayedText(OutLoud.TTS:SplitSentences(text or "")[1] or "")
+    self:SetDisplayedText(OutLoud.TTS:BuildSpeechChunks(text or "")[1] or "")
 end
 
 function TalkingHead:StopTextFlow(resetScroll)

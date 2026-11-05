@@ -9,6 +9,11 @@ end
 
 local head = Read("UI/TalkingHead.lua")
 local narration = Read("Core/Narration.lua")
+local tts = Read("Core/TTS.lua")
+assert(head:find('self:SetDisplayedText(OutLoud.TTS:BuildSpeechChunks(text or "")[1] or "")', 1, true),
+    "Prepare the same initial chunk as streaming")
+assert(tts:find("local sentences = self:BuildSpeechChunks(text)", 1, true),
+    "Build final chunks before allocating playback indexes")
 local portrait = assert(head:match("    self%.Model:ClearModel%(%)\n(.-)    self%.Model:SetAnimation%(0, 0%)"),
     "Keep portrait preparation before the existing idle animation")
 local binding = [[    if speaker.unit == "player" then

@@ -11,9 +11,17 @@ end
 function ItemTextIntegration:NormalizeText(text)
     -- ItemTextPageText is SimpleHTML. Speak its content, not its layout tags.
     local entities = { amp = "&", lt = "<", gt = ">", quot = '"', apos = "'", nbsp = " " }
-    return (text:gsub("<[^>]+>", " "):gsub("&(%a+);", function(entity)
+    local boundaries = { p = true, br = true, hr = true, div = true, li = true,
+        ul = true, ol = true, blockquote = true, h1 = true, h2 = true, h3 = true,
+        h4 = true, h5 = true, h6 = true, table = true, tr = true }
+    return (text:gsub("<[^>]+>", function(tag)
+        local name = tag:match("^<%s*/?%s*([%w]+)")
+        return name and boundaries[name:lower()] and "\n" or " "
+    end):gsub("&(%a+);", function(entity)
         return entities[entity] or ("&" .. entity .. ";")
-    end):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", ""))
+    end):gsub("\r\n", "\n"):gsub("\r", "\n")
+        :gsub("[^%S\n]+", " "):gsub(" *\n *", "\n"):gsub("\n+", "\n")
+        :gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
 function ItemTextIntegration:CapturePage()
