@@ -51,6 +51,34 @@ local function NormalizeSingleVoiceAssignment(assignment)
     return assignment == assignments.CHARACTER and assignments.CHARACTER or assignments.ALL
 end
 
+local function CaptureVoice(voiceID)
+    local name = OutLoud.VoiceSelection:GetVoiceName(voiceID)
+    if name then return { name = name, voiceID = voiceID } end
+end
+
+local function ResolveVoice(container, key, clearedValue)
+    local assignment = container[key]
+    if type(assignment) ~= "table" then return nil end
+    -- A failed first enumeration is not evidence that a voice was removed.
+    OutLoud.TTS:GetVoices()
+    if not OutLoud.TTS.VoicesReady then return nil end
+    local voiceID = OutLoud.VoiceSelection:GetVoiceID(assignment.name)
+    if voiceID == nil then
+        container[key] = clearedValue
+    else
+        assignment.voiceID = voiceID
+    end
+    return voiceID
+end
+
+local function RetireNumericSingleVoice(db, clearedValue)
+    if type(db.singleVoice) == "number" then
+        -- Keep the old value for inspection, but never infer a name from it.
+        if db.legacySingleVoiceID == nil then db.legacySingleVoiceID = db.singleVoice end
+        db.singleVoice = clearedValue
+    end
+end
+
 function Database:Initialize()
     if self.Initialized then
         return
@@ -98,6 +126,23 @@ function Database:Initialize()
     end
     self.CharacterDB = characterDB
 
+    for family, assignments in pairs(db.voices) do
+        if type(assignments) == "table" then
+            for sex, assignment in pairs(assignments) do
+                if type(assignment) == "number" then
+                    db.legacyVoiceIDs = db.legacyVoiceIDs or {}
+                    db.legacyVoiceIDs[family] = db.legacyVoiceIDs[family] or {}
+                    if db.legacyVoiceIDs[family][sex] == nil then
+                        db.legacyVoiceIDs[family][sex] = assignment
+                    end
+                    assignments[sex] = nil
+                end
+            end
+        end
+    end
+    RetireNumericSingleVoice(db)
+    RetireNumericSingleVoice(characterDB, false)
+
     self.Initialized = true
 end
 
@@ -108,7 +153,7 @@ function Database:GetVoice(family, gender)
         return nil
     end
 
-    return familyVoices[gender]
+    return ResolveVoice(familyVoices, gender)
 end
 
 function Database:SetVoice(family, gender, voiceID)
@@ -118,7 +163,7 @@ function Database:SetVoice(family, gender, voiceID)
         voices[family] = {}
     end
 
-    voices[family][gender] = voiceID
+    voices[family][gender] = CaptureVoice(voiceID)
 end
 
 function Database:GetVoiceMode()
@@ -132,17 +177,29 @@ end
 function Database:GetSingleVoice()
     if self:GetSingleVoiceAssignment() == self.SingleVoiceAssignments.CHARACTER
         and self:HasCharacterSingleVoice() then
-        return self.CharacterDB.singleVoice
+        return ResolveVoice(self.CharacterDB, "singleVoice", false)
     end
-    return self.DB.singleVoice
+    return ResolveVoice(self.DB, "singleVoice")
 end
 
 function Database:SetSingleVoice(voiceID)
     if self:GetSingleVoiceAssignment() == self.SingleVoiceAssignments.CHARACTER then
-        self.CharacterDB.singleVoice = voiceID
+        -- false is an explicit Not set override; nil means inherit global.
+        self.CharacterDB.singleVoice = CaptureVoice(voiceID) or false
     else
-        self.DB.singleVoice = voiceID
+        self.DB.singleVoice = CaptureVoice(voiceID)
     end
+end
+
+function Database:RefreshVoiceAssignments()
+    if not self.Initialized then return end
+    for _, assignments in pairs(self.DB.voices) do
+        if type(assignments) == "table" then
+            for sex in pairs(assignments) do ResolveVoice(assignments, sex) end
+        end
+    end
+    ResolveVoice(self.DB, "singleVoice")
+    ResolveVoice(self.CharacterDB, "singleVoice", false)
 end
 
 function Database:GetSingleVoiceAssignment()

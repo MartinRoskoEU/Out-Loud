@@ -417,10 +417,13 @@ function SettingsPage:RefreshVoiceOptions()
     options[1] = { label = "Not set", value = nil }
 
     for _, voice in ipairs(OutLoud.TTS:GetVoices()) do
-        table.insert(options, {
-            label = voice.name,
-            value = voice.voiceID,
-        })
+        -- A duplicate name cannot be persisted safely across enumerations.
+        if OutLoud.VoiceSelection:GetVoiceName(voice.voiceID) then
+            table.insert(options, {
+                label = voice.name,
+                value = voice.voiceID,
+            })
+        end
     end
 
     self.VoiceOptions = options

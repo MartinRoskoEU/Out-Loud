@@ -147,7 +147,8 @@ TROLL gains 118798/232863, and obsolete mappings such as Human 1793470 are remov
 Old assignments are retained as inactive values; the exact requested catalog is not
 expanded with legacy fallback rows. Multiple Voices on a Forever Draenei player
 therefore has no active family in this export. No settings reset or schema migration
-is performed. Unavailable voice IDs remain visible as unavailable until reassigned.
+is performed for family mappings. Missing or ambiguous voice selections become
+`Not set`; see the voice identity migration below.
 
 Retail player-family extensions are in its Config.lua. Shared-family allied race
 tokens use their existing exported family; gender still comes only from UnitSex.
@@ -229,8 +230,8 @@ it unregisters and clears its handler when the required Blizzard UI globals exis
   are `2` for Male and `3` for Female.
 - `OutLoudDB.voiceMode` is `"single"` or `"raceGender"`; missing/invalid values
   default to `"raceGender"`. `OutLoudDB.singleVoice` stores the optional narrator
-  voice ID using the same numeric ID convention as existing family assignments.
-  The schema adds no migration and does not rewrite the family assignment table.
+  assignment using the same `{ name, voiceID }` record as family assignments.
+  The name is authoritative; the numeric ID is only a current-list cache.
   Switching modes preserves both settings and never calls TTS start/stop.
 - Each client's global `singleVoiceAssignment` is `"allCharacters"` (default,
   including invalid values) or `"perCharacter"`. The assignment choice is shared
@@ -240,14 +241,14 @@ it unregisters and clears its handler when the required Blizzard UI globals exis
   `OutLoudRetailCharacterDB` in `SavedVariablesPerCharacter`; their configurations
   select the same names. WoW provides the current character's table, so no character
   names, GUID registry, deletion tracking, or cleanup are needed.
-  Only an explicit dropdown selection writes `CharacterDB.singleVoice` in Per
+  An explicit dropdown selection writes `CharacterDB.singleVoice` in Per
   Character mode. `Database:GetSingleVoice()` returns that override when present,
   otherwise the current global voice, without saving an inherited value. Voice ID
-  zero counts as an override. `SetSingleVoice()` writes the selected scope only;
+  zero is a valid current ID. `SetSingleVoice()` writes the selected scope only;
   switching scope writes no voice values. `ResetCharacterSingleVoice()` removes
-  the override. Choosing "Not set" in Per Character mode also removes the override
-  and resumes inheritance. An unavailable saved override remains stored and uses
-  the existing unavailable-voice error behavior.
+  the override and resumes inheritance. Choosing "Not set" in Per Character mode
+  stores `false`, an explicit empty override. A missing/ambiguous personal voice
+  also becomes `false`, so it cannot silently fall back to the global narrator.
 - `Clients/Forever/VoiceMappings.lua` and `Clients/Retail/VoiceMappings.lua` contain
   client-specific `VoiceMappings.Families` and direct
   `VoiceMappings.Models[FileDataID]` family mappings. It can be replaced with
@@ -269,8 +270,8 @@ it unregisters and clears its handler when the required Blizzard UI globals exis
 Both resolvers select the assignment mode inside `VoiceSelection`. Single Voice
 uses `Database:GetSingleVoice()` and checks it against the existing
 `TTS:GetVoices()` enumeration. It requires no family/race/gender lookup and
-returns `single-voice-not-set` or `single-voice-unavailable` for an unusable
-selection, without choosing a fallback voice or clearing the saved value.
+returns `single-voice-not-set` for an unset, missing or ambiguous selection,
+without choosing a replacement voice.
 The existing resolver paths remain unchanged. Presentation is selected separately:
 Single Voice QuestFrame narration always shows the player model and captured quest
 title. Multiple Voices keeps NPC model/name presentation and player fallback.
@@ -279,11 +280,10 @@ Gossip Single Voice shows the player model and captured NPC name. Multiple Voice
 shows the NPC model/name when resolution succeeds; player fallback retains the
 captured NPC name while using the player's model and configured voice.
 
-Both assignment modes now use `VoiceSelection:IsVoiceAvailable(voiceID)` against
-the same cached API list. An unavailable family assignment returns
-`voice-unavailable`; the existing QuestFrame player fallback still applies.
-An unavailable Single Voice never changes mode or chooses a different voice.
-Saved IDs are retained in both cases.
+Both assignment modes resolve saved names against the same cached API list.
+A missing/ambiguous family assignment is cleared and returns `voice-not-set`;
+the existing QuestFrame player fallback still applies. A missing Single Voice
+never changes mode or chooses a replacement narrator.
 
 `VoiceSelection:RefreshVoices()` is the centralized refresh entry point. It calls
 `TTS:RefreshVoices()`, updates the existing UI options table in place, and refreshes
@@ -296,25 +296,43 @@ but the local export does not guarantee native re-discovery of Windows voices
 installed or removed while the client is running. A client restart may be needed.
 
 Voice metadata exposes only `voiceID` and display `name`; no stable SAPI token is
-available in the local API export. Existing numeric assignments and SavedVariables
-remain compatible, with no migration or name matching (including duplicate names).
-ID stability across restart/enumeration changes is unverified. If the client reuses
-an ID for another voice, Out Loud cannot reliably detect/remap it from this schema;
-verify the displayed selection after changing installed voices.
+available in the local API export. Selection stores `{ name, voiceID }` using the
+exact API name, independently of engine/vendor. Resolution requires exactly one
+matching name and updates the cached ID. Missing or duplicate names clear the
+assignment to `Not set`; duplicate-name entries are omitted from the selectors
+because they cannot be identified safely across enumerations. Renaming a voice
+requires selecting it again. A different voice reusing the exact same unique name
+cannot be distinguished with this API metadata.
+
+Legacy numeric family assignments are moved once into the same client's
+`legacyVoiceIDs[family][sex]` for inspection, and legacy global/character narrator
+IDs into their respective `legacySingleVoiceID`. They are never used for playback
+or mapped to names automatically: their IDs may already identify different voices.
+Users must select voices once after upgrading. A retired character override becomes
+explicit `Not set`; other characters migrate when their saved table is loaded.
+Existing backup values are not overwritten, and selecting a new voice is never
+replaced by migration. Clients retain independent saved tables.
+
+Reconciliation runs on refresh for every family, global narrator and loaded
+character override, including inactive modes/scopes. Getters also resolve against
+the cached list. Before the first successful enumeration, named records are kept;
+enumeration exceptions retain the previous list and do not infer removals. A
+successful empty list clears selections. Native list readiness and update-event
+ordering still require in-game verification.
 
 The Voices section's Single/Multiple Voice group and the Single Voice assignment
 scope group use the existing `UIRadioButtonTemplate`. Scope controls are disabled
 in Multiple Voices mode. The one existing narrator dropdown reads the effective
 voice and refreshes immediately after a scope change, selection, or reset. The
 Reset to Global button is enabled only in Single Voice / Per Character mode with
-an override. Family voice controls and their storage are unchanged.
+an override (including explicit `Not set`). Family voice controls keep their layout.
 Both configuration areas stay visible. `ComboBox:SetEnabled()` delegates to
 the native `SettingsDropdownWithButtonsTemplate` mixin, disabling the dropdown
 and both steppers; disabled callbacks are also guarded and open menus close.
 Labels use native disabled fonts. Mode clicks and Settings reopening refresh
 checked/enabled states and selected text. All selectors share `GetVoiceOptions()`.
-Unavailable choices display `Unavailable (voice ID)` and Settings no longer
-deletes unavailable family assignments when rebuilding rows.
+Selectors display only a resolved voice or `Not set`. Refresh closes open menus
+before regenerating them, retiring choices from the previous voice list.
 The native `SetEnabled`, `SetSelectionText`, `GenerateMenu`, and `CloseMenu`
 behavior was inspected in the local Forever export's setting controls, shared
 panel templates, and menu code. Native styling and interaction require a manual
@@ -328,6 +346,10 @@ lua Tests/VoiceSelection.lua
 lua Tests/Clients.lua
 python Tests/Build.py ReleaseChecks.test_direct_development_tocs
 ```
+
+The existing tests below predate the name-based voice identity fix and have not
+been updated or rerun for it. Their historical results do not validate this fix;
+numeric fixtures need explicitly scoped updates before reuse.
 
 `Tests/Narrator.lua` exercises production database and resolver modules with supplied
 saved tables for two characters in each client. It checks dynamic inheritance,
@@ -692,7 +714,9 @@ For manual regression checks, use each voice with Split Text through manual
 and automatic QuestFrame narration and Quest Log. Verify spinner removal, original
 displayed text, sentence transitions/prefetch, completion, close/cancel, rapid
 replacement, and `/reload`. Open Settings again to refresh voices and confirm
-unavailable labels and retained assignments. Whether Windows voice changes cause
+name-preserved selections after ID changes and `Not set` after removal/ambiguity.
+Check both clients, family assignments, global/personal narrator, explicit personal
+`Not set`, reset-to-global and reload. Whether Windows voice changes cause
 the documented update event/native list refresh remains an in-game check; perform
 any voice installation/removal separately and manually. This addon never registers
 or unregisters SAPI engines.

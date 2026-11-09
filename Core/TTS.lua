@@ -196,6 +196,7 @@ function TTS:RefreshVoices()
     self.RefreshingVoices = false
     if ok and type(voices) == "table" then
         self.Voices = voices
+        self.VoicesReady = true
     else
         OutLoud:Error("TTS voice enumeration failed; retaining the last available list:", tostring(voices))
     end

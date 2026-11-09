@@ -56,7 +56,7 @@ also closes when narration ends, and the loading spinner clears when owned playb
 
 **Single Voice** uses the selected Narrator Voice for NPC, player, automatic,
 and Quest Log narration. Talking Head shows the player model, with the quest
-title for quest sources and the NPC name for gossip. An unset or unavailable narrator voice stops narration
+title for quest sources and the NPC name for gossip. An unset narrator voice stops narration
 with an error. Quest Log also shows the player model and quest title when using
 Multiple Voices. Readable items always show the player model and item title.
 
@@ -94,11 +94,15 @@ or **Per Character**, using the same Narrator Voice selector. Characters without
 an override inherit the global voice, including later global changes.
 **Reset to Global** removes only the current character's override. Switching
 assignment modes preserves both selections. Forever and Retail save these settings
-separately.
+separately. Choosing **Not set** creates an empty personal override; use
+**Reset to Global** to resume inheritance.
 
-Each family row provides separate Male and Female selectors. All selectors list
-the same TTS voices available to the game and include a **Not set** option.
-Unavailable selections are indicated without erasing the stored setting.
+Each family row provides separate Male and Female selectors. All selectors use
+the game's TTS voice list, across engines, and include a **Not set** option.
+Selections follow the exact voice name when its numeric ID changes. Missing
+voices become **Not set**. Duplicate names cannot be safely distinguished and
+are omitted from the selectors. Existing numeric-only assignments require a
+one-time reselection after upgrading.
 
 Available families come from generated mapping data. Each unique family appears
 once, regardless of how many models use it. Assignments are saved between sessions.
@@ -147,7 +151,7 @@ requests without restarting current playback.
 
 ## Project Status
 
-Both client builds are at version 0.1.1 and are independently versioned. Retail
+Both client builds are at version 0.1.2 and are independently versioned. Retail
 integration has been checked against Blizzard UI source for 12.1.5; it still
 requires manual in-game verification. Forever retains its existing Talking Head
 appearance and placement. Retail uses the same verified native graphical assets

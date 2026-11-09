@@ -49,12 +49,39 @@ end
 
 function VoiceSelection:RefreshVoices()
     local voices = OutLoud.TTS:RefreshVoices()
+    OutLoud.Database:RefreshVoiceAssignments()
     local page = OutLoud.UI.SettingsPage
     if page and page.VoiceOptions then
         page:RefreshVoiceOptions()
         page:RefreshVoiceAssignment()
     end
     return voices
+end
+
+-- Names are the only identity metadata exposed by the client. Never resolve
+-- duplicate names by ID or list position: both can change after installation.
+function VoiceSelection:GetVoiceID(name)
+    if type(name) ~= "string" or name == "" then return nil end
+    local found, matched
+    for _, voice in ipairs(OutLoud.TTS:GetVoices()) do
+        if voice.name == name then
+            if matched then return nil end
+            matched = true
+            found = voice.voiceID
+        end
+    end
+    if type(found) == "number" and found >= 0 and found % 1 == 0 then
+        return found
+    end
+end
+
+function VoiceSelection:GetVoiceName(voiceID)
+    if type(voiceID) ~= "number" or voiceID < 0 or voiceID % 1 ~= 0 then return nil end
+    for _, voice in ipairs(OutLoud.TTS:GetVoices()) do
+        if voice.voiceID == voiceID and self:GetVoiceID(voice.name) == voiceID then
+            return voice.name
+        end
+    end
 end
 
 function VoiceSelection:IsVoiceAvailable(voiceID)

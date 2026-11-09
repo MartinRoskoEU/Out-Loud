@@ -30,7 +30,7 @@ function ComboBox:Setup(options, getValue, setValue)
                 return option.label
             end
         end
-        return "Unavailable (voice " .. tostring(value) .. ")"
+        return "Not set"
     end)
     self.Dropdown:SetupMenu(function(_, rootDescription)
         for _, option in ipairs(options) do
@@ -60,5 +60,6 @@ function ComboBox:SetEnabled(enabled)
 end
 
 function ComboBox:Refresh()
+    self.Dropdown:CloseMenu()
     self.Dropdown:GenerateMenu()
 end
