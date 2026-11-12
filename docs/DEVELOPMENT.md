@@ -1675,6 +1675,19 @@ speech. Changing mode during playback should leave that session running.
 
 ### Narration diagnostics
 
+Initial speech submission starts a 30-second playback-start timer. The first
+owned playback bookmark cancels it. Session termination (including STOP,
+replacement, failure, and completion) also cancels it. The callback checks session
+ownership and active state before stopping an unconfirmed session through the
+existing STOP path and printing:
+
+`TTS playback did not start within 30 seconds. Please try again. If the problem persists, check your TTS engine.`
+
+This does not inspect an engine, process, or file, delay submission, retry speech,
+or limit playback duration after its first owned bookmark. Missing progress later
+in playback is outside this timeout's scope. Native timer, bookmark, cancellation,
+and Talking Head behavior still require in-game verification for both clients.
+
 Normal narration is silent in chat. Failed reads, caught button errors, native
 `SpeakText` errors, owned playback failures, and session-end callback errors use
 `OutLoud:Error(...)` to print a red `[Out Loud]` message. Stopping or finishing

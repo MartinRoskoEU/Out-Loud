@@ -8,6 +8,7 @@ local MAX_CANCELLED_TOKENS = 128
 local MAX_HISTORY_SESSIONS = 8
 local MAX_HISTORY_ATTEMPTS = 128
 local MAX_ATTEMPT_UTTERANCES = 2
+local PLAYBACK_START_TIMEOUT = 30
 
 local function Now()
     return GetTime and GetTime() or 0
@@ -257,7 +258,15 @@ local function StopPlayback(self, reason, outgoing)
     return ok
 end
 
+local function CancelPlaybackStartTimer(session)
+    if session.playbackStartTimer then
+        session.playbackStartTimer:Cancel()
+        session.playbackStartTimer = nil
+    end
+end
+
 local function NotifySessionEnded(session, reason)
+    CancelPlaybackStartTimer(session)
     if type(session.onSessionEnded) == "function" then
         local ok, message = pcall(session.onSessionEnded, reason, session.id)
         if not ok then
@@ -272,6 +281,7 @@ local function NotifyPlaybackStarted(session)
     end
 
     session.playbackStarted = true
+    CancelPlaybackStartTimer(session)
     if type(session.onPlaybackStarted) == "function" then
         pcall(session.onPlaybackStarted, session.id)
     end
@@ -553,6 +563,17 @@ function TTS:SubmitText(session, text, chunk)
         "voice=" .. session.voiceID .. " rate=" .. rate .. " volume=" .. volume .. " volume-source=" .. attempt.volumeSource)
     OutLoud:Debug("TTS SpeakText call: session:", session.id, "chunk:", token, "bytes:", #text,
         "voice:", session.voiceID, "rate:", rate, "volume:", volume, "volume-source:", attempt.volumeSource)
+    -- Observe only initial playback readiness; submission and prefetch remain immediate.
+    if not session.playbackStartTimer and not session.playbackStarted then
+        session.playbackStartTimer = C_Timer.NewTimer(PLAYBACK_START_TIMEOUT, function()
+            session.playbackStartTimer = nil
+            if self.CurrentSession ~= session or session.state ~= "active" or session.playbackStarted then return end
+            session.failed = true
+            Record("playback-start-timeout", session.id)
+            OutLoud:Error("TTS playback did not start within 30 seconds. Please try again. If the problem persists, check your TTS engine.")
+            self:Stop("playback-start-timeout")
+        end)
+    end
     local ok, message = pcall(
         C_VoiceChat.SpeakText,
         session.voiceID,

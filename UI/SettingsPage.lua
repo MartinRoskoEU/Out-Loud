@@ -414,7 +414,6 @@ function SettingsPage:RefreshVoiceOptions()
     -- Existing dropdown callbacks share this table; refresh it in place.
     local options = self.VoiceOptions or {}
     for index = #options, 1, -1 do options[index] = nil end
-    options[1] = { label = "Not set", value = nil }
 
     for _, voice in ipairs(OutLoud.TTS:GetVoices()) do
         -- A duplicate name cannot be persisted safely across enumerations.
@@ -425,6 +424,15 @@ function SettingsPage:RefreshVoiceOptions()
             })
         end
     end
+
+    table.sort(options, function(a, b)
+        local aName, bName = a.label:lower(), b.label:lower()
+        if aName == bName then
+            return a.label < b.label
+        end
+        return aName < bName
+    end)
+    table.insert(options, 1, { label = "Not set", value = nil })
 
     self.VoiceOptions = options
 
